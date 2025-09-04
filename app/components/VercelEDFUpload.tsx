@@ -65,8 +65,11 @@ export default function VercelEDFUpload({ isDarkMode = false, onFileUploaded }: 
 
     try {
       for (const file of filesToUpload) {
+        console.log(`Starting upload for file: ${file.name}, size: ${file.size} bytes`);
+        
         // Convert file to base64 for serverless function
         const fileBase64 = await fileToBase64(file);
+        console.log(`File converted to base64, length: ${fileBase64.length}`);
 
         const response = await fetch('/api/upload', {
           method: 'POST',
@@ -79,19 +82,28 @@ export default function VercelEDFUpload({ isDarkMode = false, onFileUploaded }: 
           }),
         });
 
+        console.log(`Response status: ${response.status}, statusText: ${response.statusText}`);
+
         if (response.ok) {
           const uploadedFile: EDFFile = await response.json();
+          console.log('Upload successful:', uploadedFile);
           setFiles(prev => [...prev, uploadedFile]);
           onFileUploaded?.(uploadedFile);
         } else {
-          const errorData = await response.json();
+          let errorData;
+          try {
+            errorData = await response.json();
+          } catch (jsonError) {
+            console.error('Failed to parse error response as JSON:', jsonError);
+            errorData = { error: `HTTP ${response.status}: ${response.statusText}` };
+          }
           console.error('Upload failed:', errorData);
           alert(`Failed to upload ${file.name}: ${errorData.error || 'Unknown error'}`);
         }
       }
     } catch (error) {
       console.error('Upload error:', error);
-      alert('Upload failed. Please try again.');
+      alert(`Upload failed. Please try again. Error: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setUploading(false);
     }
