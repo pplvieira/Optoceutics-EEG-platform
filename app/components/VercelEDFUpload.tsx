@@ -1,19 +1,7 @@
 'use client';
 
 import React, { useState, useRef } from 'react';
-
-interface EDFFile {
-  id: string;
-  filename: string;
-  file_size_mb: number;
-  uploaded_at: string;
-  duration_seconds?: number;
-  sampling_frequency?: number;
-  num_channels?: number;
-  channel_names?: string[];
-  is_processed: boolean;
-  processing_message?: string;
-}
+import { EDFFile } from '../types/edf';
 
 interface VercelEDFUploadProps {
   isDarkMode?: boolean;

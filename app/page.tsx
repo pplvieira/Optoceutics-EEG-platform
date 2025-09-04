@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Image from 'next/image';
 import VercelEDFUpload from './components/VercelEDFUpload';
 import VercelEDFAnalysis from './components/VercelEDFAnalysis';
+import { EDFFile } from './types/edf';
 
 type DesktopMode = 'developer' | 'experiment';
 
@@ -24,18 +25,6 @@ const ExperimentTabs = [
   'Task 3: Response',
   'Results'
 ];
-
-interface EDFFile {
-  id: string;
-  name: string;
-  file_size_mb: number;
-  uploaded_at: string;
-  duration_seconds?: number;
-  sampling_frequency?: number;
-  num_channels?: number;
-  channel_names?: string[];
-  is_processed: boolean;
-}
 
 export default function Home() {
   const [currentMode, setCurrentMode] = useState<DesktopMode>('developer');
