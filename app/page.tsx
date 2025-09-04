@@ -233,7 +233,6 @@ export default function Home() {
 
 function DeveloperTabContent({ 
   tabIndex, 
-  tabName, 
   isDarkMode = false, 
   uploadedFiles = [], 
   selectedFile = null, 
@@ -440,7 +439,7 @@ function DeveloperTabContent({
   );
 }
 
-function ExperimentTabContent({ tabIndex, tabName }: { tabIndex: number; tabName: string }) {
+function ExperimentTabContent({ tabIndex }: { tabIndex: number; tabName: string }) {
   const content = [
     {
       title: "Welcome to Your Session",

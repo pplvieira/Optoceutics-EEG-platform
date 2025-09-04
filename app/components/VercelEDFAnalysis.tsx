@@ -15,13 +15,23 @@ interface EDFFile {
   raw_file_data?: string; // base64 encoded file for serverless processing
 }
 
+interface AnalysisResult {
+  type?: string;
+  analysis_type?: string;
+  plot?: string;
+  data?: Record<string, unknown>;
+  parameters?: Record<string, unknown>;
+  error?: string;
+  message?: string;
+}
+
 interface VercelEDFAnalysisProps {
   file: EDFFile;
   isDarkMode?: boolean;
 }
 
 export default function VercelEDFAnalysis({ file, isDarkMode = false }: VercelEDFAnalysisProps) {
-  const [analysisResult, setAnalysisResult] = useState<any>(null);
+  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [loading, setLoading] = useState<{ [key: string]: boolean }>({});
 
   // Store file data for analysis (temporary, session-based)
@@ -50,7 +60,7 @@ export default function VercelEDFAnalysis({ file, isDarkMode = false }: VercelED
     }
   };
 
-  const performAnalysis = async (analysisType: string, parameters: any = {}) => {
+  const performAnalysis = async (analysisType: string, parameters: Record<string, unknown> = {}) => {
     if (!fileData) {
       alert('Please upload a file first');
       return;
@@ -282,6 +292,7 @@ export default function VercelEDFAnalysis({ file, isDarkMode = false }: VercelED
           
           {analysisResult.plot && (
             <div className="text-center mb-4">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={`data:image/png;base64,${analysisResult.plot}`}
                 alt={`${analysisResult.analysis_type || analysisResult.type} Analysis`}
@@ -324,7 +335,7 @@ export default function VercelEDFAnalysis({ file, isDarkMode = false }: VercelED
           : 'bg-green-50 border-green-200 text-green-800'
       }`}>
         <p className="text-sm">
-          <strong>Serverless Processing:</strong> Your EDF file is processed using Vercel's Python functions. 
+          <strong>Serverless Processing:</strong> Your EDF file is processed using Vercel&apos;s Python functions. 
           Files are temporarily processed in memory and automatically deleted after analysis.
         </p>
       </div>
