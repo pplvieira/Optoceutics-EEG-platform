@@ -6,7 +6,11 @@ import sys
 
 def main():
     """Run administrative tasks."""
-    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'eeg_backend.settings')
+    # Use production settings if RAILWAY_ENVIRONMENT is set
+    if os.environ.get('RAILWAY_ENVIRONMENT'):
+        os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'production_settings')
+    else:
+        os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'eeg_backend.settings')
     try:
         from django.core.management import execute_from_command_line
     except ImportError as exc:
