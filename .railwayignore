@@ -1,0 +1,15 @@
+node_modules/
+*.log
+.git/
+.next/
+.vercel/
+frontend/
+app/
+public/
+*.md
+package*.json
+tailwind.config.js
+next.config.js
+postcss.config.js
+tsconfig.json
+eslint.config.mjs
