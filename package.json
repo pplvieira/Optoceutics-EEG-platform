@@ -6,13 +6,7 @@
     "dev": "next dev --turbopack",
     "build": "next build --turbopack",
     "start": "next start",
-    "lint": "eslint",
-    "backend:install": "cd backend && pip install -r requirements.txt",
-    "backend:migrate": "cd backend && python manage.py migrate",
-    "backend:dev": "cd backend && python manage.py runserver 8000",
-    "backend:admin": "cd backend && python manage.py createsuperuser",
-    "dev:full": "concurrently \"npm run dev\" \"npm run backend:dev\"",
-    "setup": "npm install && npm run backend:install && npm run backend:migrate"
+    "lint": "eslint"
   },
   "dependencies": {
     "next": "^15.5.2",
@@ -25,7 +19,6 @@
     "@types/react": "19.1.12",
     "@types/react-dom": "^19",
     "autoprefixer": "^10.4.21",
-    "concurrently": "^7.6.0",
     "eslint": "^9",
     "eslint-config-next": "15.5.2",
     "postcss": "^8.5.6",

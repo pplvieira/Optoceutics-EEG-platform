@@ -1,9 +1,7 @@
 # Vercel ignore file
-backend/
 node_modules/
 *.log
 .git/
 .next/
-railway.json
-nixpacks.toml
-Procfile
+README.md
+CLIENT_SIDE_EDF_SOLUTION.md

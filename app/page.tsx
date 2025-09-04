@@ -2,9 +2,8 @@
 
 import { useState } from 'react';
 import Image from 'next/image';
-import EDFUpload from './components/EDFUpload';
-import EDFAnalysis from './components/EDFAnalysis';
-import EDFSignalProcessing from './components/EDFSignalProcessing';
+import VercelEDFUpload from './components/VercelEDFUpload';
+import VercelEDFAnalysis from './components/VercelEDFAnalysis';
 
 type DesktopMode = 'developer' | 'experiment';
 
@@ -297,7 +296,7 @@ function DeveloperTabContent({
           }`}>Upload and analyze EEG files with advanced processing capabilities</p>
         </div>
 
-        <EDFUpload isDarkMode={isDarkMode} onFileUploaded={onFileUploaded} />
+        <VercelEDFUpload isDarkMode={isDarkMode} onFileUploaded={onFileUploaded} />
 
         {uploadedFiles.length > 0 && (
           <div className={`p-4 rounded-lg border ${
@@ -335,7 +334,7 @@ function DeveloperTabContent({
           </div>
         )}
 
-        {selectedFile && <EDFAnalysis file={selectedFile} isDarkMode={isDarkMode} />}
+        {selectedFile && <VercelEDFAnalysis file={selectedFile} isDarkMode={isDarkMode} />}
       </div>
     );
   }
@@ -353,7 +352,7 @@ function DeveloperTabContent({
           }`}>Upload EDF files and apply preprocessing operations</p>
         </div>
 
-        <EDFUpload isDarkMode={isDarkMode} onFileUploaded={onFileUploaded} />
+        <VercelEDFUpload isDarkMode={isDarkMode} onFileUploaded={onFileUploaded} />
 
         {uploadedFiles.length > 0 && (
           <div className={`p-4 rounded-lg border ${
@@ -391,7 +390,7 @@ function DeveloperTabContent({
           </div>
         )}
 
-        {selectedFile && <EDFSignalProcessing file={selectedFile} isDarkMode={isDarkMode} />}
+        {selectedFile && <VercelEDFAnalysis file={selectedFile} isDarkMode={isDarkMode} />}
       </div>
     );
   }
