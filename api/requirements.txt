@@ -1,5 +1,6 @@
-# Core packages for EDF processing
-numpy==1.24.3
-scipy==1.11.3
-matplotlib==3.7.2
-pyedflib==0.1.32
+# Core packages for EDF processing compatible with Python 3.12
+setuptools
+numpy>=1.26.0,<2.0.0
+scipy>=1.12.0,<2.0.0
+matplotlib>=3.8.0,<4.0.0
+pyedflib>=0.1.35
