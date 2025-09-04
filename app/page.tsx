@@ -2,6 +2,9 @@
 
 import { useState } from 'react';
 import Image from 'next/image';
+import EDFUpload from './components/EDFUpload';
+import EDFAnalysis from './components/EDFAnalysis';
+import EDFSignalProcessing from './components/EDFSignalProcessing';
 
 type DesktopMode = 'developer' | 'experiment';
 
@@ -23,9 +26,23 @@ const ExperimentTabs = [
   'Results'
 ];
 
+interface EDFFile {
+  id: string;
+  name: string;
+  file_size_mb: number;
+  uploaded_at: string;
+  duration_seconds?: number;
+  sampling_frequency?: number;
+  num_channels?: number;
+  channel_names?: string[];
+  is_processed: boolean;
+}
+
 export default function Home() {
   const [currentMode, setCurrentMode] = useState<DesktopMode>('developer');
   const [activeTab, setActiveTab] = useState(0);
+  const [uploadedFiles, setUploadedFiles] = useState<EDFFile[]>([]);
+  const [selectedFile, setSelectedFile] = useState<EDFFile | null>(null);
 
   const currentTabs = currentMode === 'developer' ? DeveloperTabs : ExperimentTabs;
 
@@ -149,7 +166,18 @@ export default function Home() {
           {/* Tab Content */}
           <div className="p-8">
             {currentMode === 'developer' ? (
-              <DeveloperTabContent tabIndex={activeTab} tabName={currentTabs[activeTab]} isDarkMode={true} />
+              <DeveloperTabContent 
+                tabIndex={activeTab} 
+                tabName={currentTabs[activeTab]} 
+                isDarkMode={true}
+                uploadedFiles={uploadedFiles}
+                selectedFile={selectedFile}
+                onFileUploaded={(file) => {
+                  setUploadedFiles(prev => [...prev, file]);
+                  if (!selectedFile) setSelectedFile(file);
+                }}
+                onFileSelected={setSelectedFile}
+              />
             ) : (
               <ExperimentTabContent tabIndex={activeTab} tabName={currentTabs[activeTab]} />
             )}
@@ -204,7 +232,23 @@ export default function Home() {
   );
 }
 
-function DeveloperTabContent({ tabIndex, tabName, isDarkMode = false }: { tabIndex: number; tabName: string; isDarkMode?: boolean }) {
+function DeveloperTabContent({ 
+  tabIndex, 
+  tabName, 
+  isDarkMode = false, 
+  uploadedFiles = [], 
+  selectedFile = null, 
+  onFileUploaded, 
+  onFileSelected 
+}: { 
+  tabIndex: number; 
+  tabName: string; 
+  isDarkMode?: boolean;
+  uploadedFiles?: EDFFile[];
+  selectedFile?: EDFFile | null;
+  onFileUploaded?: (file: EDFFile) => void;
+  onFileSelected?: (file: EDFFile) => void;
+}) {
   const content = [
     {
       title: "Data Collection Hub",
@@ -240,6 +284,119 @@ function DeveloperTabContent({ tabIndex, tabName, isDarkMode = false }: { tabInd
 
   const current = content[tabIndex];
 
+  // Handle Analysis Tools tab (index 2)
+  if (tabIndex === 2) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h3 className={`text-2xl font-bold mb-2 ${
+            isDarkMode ? 'text-[var(--dark-text)]' : 'text-[var(--navy)]'
+          }`}>Analysis Toolkit</h3>
+          <p className={`text-lg ${
+            isDarkMode ? 'text-[var(--dark-text-secondary)]' : 'text-gray-600'
+          }`}>Upload and analyze EEG files with advanced processing capabilities</p>
+        </div>
+
+        <EDFUpload isDarkMode={isDarkMode} onFileUploaded={onFileUploaded} />
+
+        {uploadedFiles.length > 0 && (
+          <div className={`p-4 rounded-lg border ${
+            isDarkMode 
+              ? 'bg-[var(--dark-card)] border-[var(--dark-border)]' 
+              : 'bg-gray-50 border-gray-200'
+          }`}>
+            <h4 className={`text-lg font-semibold mb-3 ${
+              isDarkMode ? 'text-[var(--dark-text)]' : 'text-gray-800'
+            }`}>
+              Select File for Analysis
+            </h4>
+            <div className="space-y-2">
+              {uploadedFiles.map(file => (
+                <button
+                  key={file.id}
+                  onClick={() => onFileSelected?.(file)}
+                  className={`w-full text-left p-3 rounded border transition-colors ${
+                    selectedFile?.id === file.id
+                      ? isDarkMode
+                        ? 'bg-[var(--gold)] text-[var(--navy)] border-[var(--gold)]'
+                        : 'bg-blue-100 text-blue-800 border-blue-300'
+                      : isDarkMode
+                      ? 'bg-[var(--dark-bg-secondary)] border-[var(--dark-border)] text-[var(--dark-text)] hover:border-[var(--gold)]'
+                      : 'bg-white border-gray-200 hover:border-blue-300'
+                  }`}
+                >
+                  <div className="font-medium">{file.name}</div>
+                  <div className="text-sm opacity-75">
+                    {file.num_channels} channels • {Math.round(file.duration_seconds || 0)}s • {file.file_size_mb}MB
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {selectedFile && <EDFAnalysis file={selectedFile} isDarkMode={isDarkMode} />}
+      </div>
+    );
+  }
+
+  // Handle Signal Processing tab (index 1)
+  if (tabIndex === 1) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h3 className={`text-2xl font-bold mb-2 ${
+            isDarkMode ? 'text-[var(--dark-text)]' : 'text-[var(--navy)]'
+          }`}>Signal Processing Pipeline</h3>
+          <p className={`text-lg ${
+            isDarkMode ? 'text-[var(--dark-text-secondary)]' : 'text-gray-600'
+          }`}>Upload EDF files and apply preprocessing operations</p>
+        </div>
+
+        <EDFUpload isDarkMode={isDarkMode} onFileUploaded={onFileUploaded} />
+
+        {uploadedFiles.length > 0 && (
+          <div className={`p-4 rounded-lg border ${
+            isDarkMode 
+              ? 'bg-[var(--dark-card)] border-[var(--dark-border)]' 
+              : 'bg-gray-50 border-gray-200'
+          }`}>
+            <h4 className={`text-lg font-semibold mb-3 ${
+              isDarkMode ? 'text-[var(--dark-text)]' : 'text-gray-800'
+            }`}>
+              Select File for Processing
+            </h4>
+            <div className="space-y-2">
+              {uploadedFiles.map(file => (
+                <button
+                  key={file.id}
+                  onClick={() => onFileSelected?.(file)}
+                  className={`w-full text-left p-3 rounded border transition-colors ${
+                    selectedFile?.id === file.id
+                      ? isDarkMode
+                        ? 'bg-[var(--gold)] text-[var(--navy)] border-[var(--gold)]'
+                        : 'bg-blue-100 text-blue-800 border-blue-300'
+                      : isDarkMode
+                      ? 'bg-[var(--dark-bg-secondary)] border-[var(--dark-border)] text-[var(--dark-text)] hover:border-[var(--gold)]'
+                      : 'bg-white border-gray-200 hover:border-blue-300'
+                  }`}
+                >
+                  <div className="font-medium">{file.name}</div>
+                  <div className="text-sm opacity-75">
+                    {file.num_channels} channels • {Math.round(file.duration_seconds || 0)}s • {file.file_size_mb}MB
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {selectedFile && <EDFSignalProcessing file={selectedFile} isDarkMode={isDarkMode} />}
+      </div>
+    );
+  }
+
+  // Default content for other tabs
   return (
     <div className="space-y-6">
       <div>
