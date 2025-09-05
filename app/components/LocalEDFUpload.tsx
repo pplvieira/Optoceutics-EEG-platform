@@ -30,7 +30,7 @@ export default function LocalEDFUpload({ isDarkMode = false, onFileUploaded }: L
       } else {
         setBackendStatus('offline');
       }
-    } catch (error) {
+    } catch {
       setBackendStatus('offline');
     }
   };

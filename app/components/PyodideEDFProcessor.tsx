@@ -127,7 +127,7 @@ export default function PyodideEDFProcessor() {
           await micropip.install(['mne']);
           setLoadingMessage('MNE-Python installed successfully');
           edf_library_available = 'mne';
-        } catch (mneError) {
+        } catch {
           console.warn('MNE not available, trying pyedflib...');
           
           // Fallback to pyedflib
@@ -136,17 +136,19 @@ export default function PyodideEDFProcessor() {
             await micropip.install(['pyedflib']);
             setLoadingMessage('pyedflib installed successfully');
             edf_library_available = 'pyedflib';
-          } catch (pyedflibError) {
+          } catch {
             console.warn('Neither MNE nor pyedflib available, using pure Python EDF reader');
             setLoadingMessage('Using built-in pure Python EDF reader');
             edf_library_available = false;
           }
         }
-      } catch (error) {
+      } catch {
         console.warn('Package installation failed, using pure Python EDF reader');
         setLoadingMessage('Using built-in pure Python EDF reader');
         edf_library_available = false;
       }
+      
+      console.log('EDF library available:', edf_library_available);
       
       // Setup Python environment
       setLoadingMessage('Setting up analysis environment...');
