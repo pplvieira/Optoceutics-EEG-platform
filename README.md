@@ -195,3 +195,5 @@ eeg-platform/
 ---
 
 *This platform implements research-grade SSVEP analysis suitable for scientific applications. Ensure compliance with data handling policies when processing EEG data.*
+
+<!-- Build fix commit -->
