@@ -5,7 +5,7 @@
 /* eslint-disable @next/next/no-img-element */
 import React, { useState, useCallback, useRef } from 'react';
 import axios from 'axios';
-// @ts-ignore - react-plotly.js types not available
+// @ts-expect-error - react-plotly.js types not available
 import Plot from 'react-plotly.js';
 
 interface EDFMetadata {
