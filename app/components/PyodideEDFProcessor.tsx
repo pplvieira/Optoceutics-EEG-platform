@@ -7,7 +7,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 // Pyodide types
 declare global {
   interface Window {
-    loadPyodide: () => Promise<any>;
+    loadPyodide: (config?: { indexURL?: string }) => Promise<any>;
     pyodide: any;
   }
 }
@@ -22,6 +22,8 @@ interface EDFMetadata {
   start_date?: string;
   start_time?: string;
   subject_id?: string;
+  library_used?: string;
+  real_data?: boolean;
 }
 
 interface AnalysisResult {
@@ -117,7 +119,7 @@ export default function PyodideEDFProcessor() {
       
       // Try to install MNE first, then pyedflib, with pure Python fallback
       setLoadingMessage('Installing EDF processing libraries...');
-      let edf_library_available = false;
+      let edf_library_available: string | boolean = false;
       try {
         const micropip = pyodide.pyimport("micropip");
         
@@ -1296,7 +1298,7 @@ print("Python EDF analysis environment ready!")
       const file = files[0];
       handleFileSelect(file);
     }
-  }, [handleFileSelect]);
+  }, []);
 
   // Progress simulation for better UX
   const simulateProgress = useCallback((duration: number) => {
