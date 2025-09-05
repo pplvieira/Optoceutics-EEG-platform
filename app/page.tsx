@@ -2,16 +2,19 @@
 
 import { useState } from 'react';
 import Image from 'next/image';
+import ComprehensiveEDFDashboard from './components/ComprehensiveEDFDashboard';
+import PyodideEDFProcessor from './components/PyodideEDFProcessor';
 import VercelEDFUpload from './components/VercelEDFUpload';
 import VercelEDFAnalysis from './components/VercelEDFAnalysis';
 import { EDFFile } from './types/edf';
 
-type DesktopMode = 'developer' | 'experiment';
+type DesktopMode = 'developer' | 'experiment' | 'local' | 'browser';
 
 const DeveloperTabs = [
   'Data Collection',
   'Signal Processing', 
   'Analysis Tools',
+  'Local Backend',
   'Visualization',
   'Export/API',
   'System Config'
@@ -62,29 +65,55 @@ export default function Home() {
             <div className="bg-blue-800 rounded-lg p-1 flex">
               <button
                 onClick={() => {
+                  setCurrentMode('browser');
+                  setActiveTab(0);
+                }}
+                className={`px-3 py-2 rounded-md font-medium transition-all text-sm ${
+                  currentMode === 'browser'
+                    ? 'bg-[var(--gold)] text-[var(--navy)] shadow-lg'
+                    : 'text-blue-200 hover:text-white hover:bg-blue-700'
+                }`}
+              >
+                Browser Python
+              </button>
+              <button
+                onClick={() => {
+                  setCurrentMode('local');
+                  setActiveTab(0);
+                }}
+                className={`px-3 py-2 rounded-md font-medium transition-all text-sm ${
+                  currentMode === 'local'
+                    ? 'bg-[var(--gold)] text-[var(--navy)] shadow-lg'
+                    : 'text-blue-200 hover:text-white hover:bg-blue-700'
+                }`}
+              >
+                Local Backend
+              </button>
+              <button
+                onClick={() => {
                   setCurrentMode('developer');
                   setActiveTab(0);
                 }}
-                className={`px-6 py-2 rounded-md font-medium transition-all ${
+                className={`px-3 py-2 rounded-md font-medium transition-all text-sm ${
                   currentMode === 'developer'
                     ? 'bg-[var(--gold)] text-[var(--navy)] shadow-lg'
                     : 'text-blue-200 hover:text-white hover:bg-blue-700'
                 }`}
               >
-                Developer Mode
+                Developer
               </button>
               <button
                 onClick={() => {
                   setCurrentMode('experiment');
                   setActiveTab(0);
                 }}
-                className={`px-6 py-2 rounded-md font-medium transition-all ${
+                className={`px-3 py-2 rounded-md font-medium transition-all text-sm ${
                   currentMode === 'experiment'
                     ? 'bg-[var(--gold)] text-[var(--navy)] shadow-lg'
                     : 'text-blue-200 hover:text-white hover:bg-blue-700'
                 }`}
               >
-                Experiment Mode
+                Experiment
               </button>
             </div>
           </div>
@@ -96,25 +125,43 @@ export default function Home() {
         {/* Mode Description */}
         <div className="mb-8 text-center">
           <h2 className={`text-3xl font-bold mb-4 ${
-            currentMode === 'developer' 
+            currentMode === 'developer' || currentMode === 'local' || currentMode === 'browser'
               ? 'text-[var(--dark-text)]' 
               : 'text-[var(--navy)]'
           }`}>
-            {currentMode === 'developer' ? 'Technical Dashboard' : 'Participant Interface'}
+            {currentMode === 'browser' ? 'Browser-Based Python Processing' :
+             currentMode === 'developer' ? 'Technical Dashboard' : 
+             currentMode === 'local' ? 'Local Backend Processing' : 'Participant Interface'}
           </h2>
-          <p className={`max-w-2xl mx-auto ${
-            currentMode === 'developer' 
+          <p className={`max-w-3xl mx-auto ${
+            currentMode === 'developer' || currentMode === 'local' || currentMode === 'browser'
               ? 'text-[var(--dark-text-secondary)]' 
               : 'text-gray-600'
           }`}>
-            {currentMode === 'developer' 
+            {currentMode === 'browser'
+              ? 'Full Python-powered EEG analysis running entirely in your browser using WebAssembly. No server required, no file uploads, no size limits. Complete privacy with pyedflib, NumPy, SciPy, and scikit-learn.'
+              : currentMode === 'developer' 
               ? 'Comprehensive tools for EEG data collection, analysis, and visualization. Configure experiments, process signals, and generate insights.'
+              : currentMode === 'local' 
+              ? 'Advanced EEG processing with local Python backend. Full scientific computing stack with SSVEP analysis, PCA, and large file support.'
               : 'Welcome to your experiment session. Follow the guided tasks and interact with the activities designed to capture neural responses.'
             }
           </p>
         </div>
 
         {/* Desktop Interface */}
+        {/* Browser Python Mode */}
+        {currentMode === 'browser' && (
+          <PyodideEDFProcessor />
+        )}
+        
+        {/* Local Backend Mode */}
+        {currentMode === 'local' && (
+          <ComprehensiveEDFDashboard />
+        )}
+        
+        {/* Other Modes */}
+        {currentMode !== 'local' && currentMode !== 'browser' && (
         <div className={`rounded-2xl shadow-xl border overflow-hidden transition-colors duration-300 ${
           currentMode === 'developer' 
             ? 'bg-[var(--dark-card)] border-[var(--dark-border)]' 
@@ -171,6 +218,7 @@ export default function Home() {
             )}
           </div>
         </div>
+        )}
 
         {/* Features Overview */}
         <div className="mt-12 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
