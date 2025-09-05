@@ -1,5 +1,7 @@
 'use client'
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import React, { useState, useCallback, useRef } from 'react';
 import axios from 'axios';
 import Plot from 'react-plotly.js';
@@ -20,8 +22,8 @@ interface EDFMetadata {
 
 interface AnalysisResult {
   plot?: string;
-  data?: any;
-  parameters?: any;
+  data?: Record<string, any>;
+  parameters?: Record<string, any>;
   analysis_type: string;
   message?: string;
   [key: string]: any;

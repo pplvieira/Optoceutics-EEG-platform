@@ -1,11 +1,13 @@
 'use client'
 
+/* eslint-disable @next/next/no-img-element */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 
 // Pyodide types
 declare global {
   interface Window {
-    loadPyodide: any;
+    loadPyodide: () => Promise<any>;
     pyodide: any;
   }
 }
@@ -25,8 +27,8 @@ interface EDFMetadata {
 interface AnalysisResult {
   analysis_type: string;
   plot_base64?: string;
-  data?: any;
-  parameters?: any;
+  data?: Record<string, any>;
+  parameters?: Record<string, any>;
   message?: string;
   success: boolean;
   error?: string;
@@ -98,7 +100,7 @@ export default function PyodideEDFProcessor() {
     
     try {
       // Load Pyodide
-      const pyodide = await window.loadPyodide({
+      const pyodide: any = await window.loadPyodide({
         indexURL: "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/"
       });
       
@@ -1241,7 +1243,7 @@ print("Python EDF analysis environment ready!")
       setPyodideLoading(false);
       setLoadingMessage('');
     }
-  }, []);
+  }, [pyodideReady, pyodideLoading]);
 
   // Load Pyodide on component mount
   useEffect(() => {
@@ -1292,7 +1294,7 @@ print("Python EDF analysis environment ready!")
       const file = files[0];
       handleFileSelect(file);
     }
-  }, []);
+  }, [handleFileSelect]);
 
   // Progress simulation for better UX
   const simulateProgress = useCallback((duration: number) => {
