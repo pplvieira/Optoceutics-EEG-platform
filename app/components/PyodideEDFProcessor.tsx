@@ -75,6 +75,9 @@ export default function PyodideEDFProcessor() {
   const [dragActive, setDragActive] = useState(false);
   const [selectedChannels, setSelectedChannels] = useState<string[]>([]);
   const [collapsedResults, setCollapsedResults] = useState<Set<number>>(new Set());
+  const [timeFrameStart, setTimeFrameStart] = useState<number>(0);
+  const [timeFrameEnd, setTimeFrameEnd] = useState<number>(0);
+  const [useTimeFrame, setUseTimeFrame] = useState<boolean>(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pyodideRef = useRef<any>(null);
@@ -739,8 +742,93 @@ def get_sample_frequency(edf_reader, channel=0):
     else:
         return edf_reader.getSampleFrequency(channel)
 
-def analyze_ssvep(target_freq=40.0, pca_components=5, frequency_bands=None):
-    """Comprehensive SSVEP analysis"""
+def crop_edf_data(edf_reader, start_time=None, end_time=None):
+    """Create a cropped copy of EDF data based on time range"""
+    if start_time is None or end_time is None:
+        return edf_reader  # Return original if no time range specified
+    
+    try:
+        sample_rate = get_sample_frequency(edf_reader)
+        
+        # Convert time to samples
+        start_sample = int(start_time * sample_rate)
+        end_sample = int(end_time * sample_rate)
+        
+        if MNE_AVAILABLE and hasattr(edf_reader, 'crop'):
+            # MNE has built-in cropping
+            cropped_raw = edf_reader.copy().crop(tmin=start_time, tmax=end_time)
+            return cropped_raw
+        elif PYEDFLIB_AVAILABLE and hasattr(edf_reader, 'readSignal'):
+            # For pyedflib, we need to create a virtual cropped reader
+            class CroppedEDFReader:
+                def __init__(self, original_reader, start_sample, end_sample):
+                    self.original_reader = original_reader
+                    self.start_sample = start_sample
+                    self.end_sample = end_sample
+                    self.duration_samples = end_sample - start_sample
+                    
+                def getSignalLabels(self):
+                    return self.original_reader.getSignalLabels()
+                    
+                def getSampleFrequency(self, channel):
+                    return self.original_reader.getSampleFrequency(channel)
+                    
+                def readSignal(self, channel, start=0, num_samples=None):
+                    if num_samples is None:
+                        num_samples = self.duration_samples - start
+                    
+                    # Adjust to original file coordinates
+                    original_start = self.start_sample + start
+                    actual_samples = min(num_samples, self.duration_samples - start)
+                    
+                    if actual_samples <= 0:
+                        return np.array([])
+                    
+                    return self.original_reader.readSignal(channel, original_start, actual_samples)
+                
+                def signals_in_file(self):
+                    return self.original_reader.signals_in_file()
+            
+            return CroppedEDFReader(edf_reader, start_sample, end_sample)
+        else:
+            # For pure Python reader, create cropped version
+            class CroppedPureEDFReader:
+                def __init__(self, original_reader, start_sample, end_sample):
+                    self.original_reader = original_reader
+                    self.start_sample = start_sample
+                    self.end_sample = end_sample
+                    self.duration_samples = end_sample - start_sample
+                    
+                def getSignalLabels(self):
+                    return self.original_reader.getSignalLabels()
+                    
+                def getSampleFrequency(self, channel):
+                    return self.original_reader.getSampleFrequency(channel)
+                    
+                def readSignal(self, channel, start_sample=0, num_samples=None):
+                    if num_samples is None:
+                        num_samples = self.duration_samples - start_sample
+                    
+                    # Adjust to original file coordinates
+                    original_start = self.start_sample + start_sample
+                    actual_samples = min(num_samples, self.duration_samples - start_sample)
+                    
+                    if actual_samples <= 0:
+                        return np.array([])
+                    
+                    return self.original_reader.readSignal(channel, original_start, actual_samples)
+                
+                def signals_in_file(self):
+                    return len(self.original_reader.getSignalLabels())
+            
+            return CroppedPureEDFReader(edf_reader, start_sample, end_sample)
+            
+    except Exception as e:
+        print(f"Error cropping EDF data: {e}")
+        return edf_reader  # Return original on error
+
+def analyze_ssvep(target_freq=40.0, pca_components=5, frequency_bands=None, start_time=None, end_time=None):
+    """Comprehensive SSVEP analysis with optional time frame cropping"""
     global current_edf_data, current_metadata
     
     if current_edf_data is None:
@@ -750,7 +838,8 @@ def analyze_ssvep(target_freq=40.0, pca_components=5, frequency_bands=None):
         frequency_bands = [8, 12, 30, 100]
     
     try:
-        edf_reader = current_edf_data
+        # Apply time frame cropping if specified
+        edf_reader = crop_edf_data(current_edf_data, start_time, end_time)
         sample_rate = get_sample_frequency(edf_reader)
         
         # Use user-selected channels from the interface
@@ -977,15 +1066,16 @@ Detection Quality:
         import traceback
         return json.dumps({'error': f'Analysis failed: {str(e)}', 'traceback': traceback.format_exc()})
 
-def analyze_traditional(analysis_type, parameters):
-    """Traditional EEG analysis functions"""
+def analyze_traditional(analysis_type, parameters, start_time=None, end_time=None):
+    """Traditional EEG analysis functions with optional time frame cropping"""
     global current_edf_data, current_metadata
     
     if current_edf_data is None:
         return json.dumps({'error': 'No EDF file loaded', 'success': False})
     
     try:
-        edf_reader = current_edf_data
+        # Apply time frame cropping if specified
+        edf_reader = crop_edf_data(current_edf_data, start_time, end_time)
         
         if analysis_type == 'raw_signal':
             return analyze_raw_signal(edf_reader, parameters)
@@ -1368,6 +1458,11 @@ print("Python EDF analysis environment ready!")
         setSelectedChannels(parsedResult.channel_names);
       }
       
+      // Initialize time frame to full duration
+      if (parsedResult.duration_seconds) {
+        setTimeFrameEnd(parsedResult.duration_seconds);
+      }
+      
       // Clear previous results
       setAnalysisResults([]);
       setSSVEPResult(null);
@@ -1406,10 +1501,19 @@ print("Python EDF analysis environment ready!")
       pyodideRef.current.globals.set('pca_components', ssvepParams.pca_components);
       pyodideRef.current.globals.set('frequency_bands', ssvepParams.frequency_bands);
       pyodideRef.current.globals.set('js_selected_channels', selectedChannels);
+      
+      // Set time frame parameters if enabled
+      if (useTimeFrame) {
+        pyodideRef.current.globals.set('start_time', timeFrameStart);
+        pyodideRef.current.globals.set('end_time', timeFrameEnd);
+      } else {
+        pyodideRef.current.globals.set('start_time', null);
+        pyodideRef.current.globals.set('end_time', null);
+      }
 
-      // Run analysis
+      // Run analysis with time frame parameters
       const result = await pyodideRef.current.runPython(`
-        analyze_ssvep(target_freq, pca_components, frequency_bands)
+        analyze_ssvep(target_freq, pca_components, frequency_bands, start_time, end_time)
       `);
 
       const parsedResult = JSON.parse(result);
@@ -1466,10 +1570,19 @@ print("Python EDF analysis environment ready!")
       pyodideRef.current.globals.set('analysis_type', analysisType);
       pyodideRef.current.globals.set('parameters', pyodideRef.current.toPy(parameters));
       pyodideRef.current.globals.set('js_selected_channels', selectedChannels);
+      
+      // Set time frame parameters if enabled
+      if (useTimeFrame) {
+        pyodideRef.current.globals.set('start_time', timeFrameStart);
+        pyodideRef.current.globals.set('end_time', timeFrameEnd);
+      } else {
+        pyodideRef.current.globals.set('start_time', null);
+        pyodideRef.current.globals.set('end_time', null);
+      }
 
-      // Run analysis
+      // Run analysis with time frame parameters
       const result = await pyodideRef.current.runPython(`
-        analyze_traditional(analysis_type, parameters)
+        analyze_traditional(analysis_type, parameters, start_time, end_time)
       `);
 
       const parsedResult = JSON.parse(result);
@@ -1898,6 +2011,168 @@ print("Python EDF analysis environment ready!")
             <div className="mt-3 text-sm text-gray-600">
               Selected: {selectedChannels.length} of {metadata.channel_names.length} channels
             </div>
+          </div>
+        )}
+
+        {/* Time Frame Selection */}
+        {metadata && metadata.duration_seconds && (
+          <div className="bg-white rounded-lg shadow-lg p-4 mb-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-lg font-semibold">Time Frame Selection</h3>
+              <label className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  checked={useTimeFrame}
+                  onChange={(e) => setUseTimeFrame(e.target.checked)}
+                  className="rounded border-gray-300"
+                />
+                <span className="text-sm font-medium">Use custom time frame</span>
+              </label>
+            </div>
+            
+            {useTimeFrame && (
+              <div className="space-y-4">
+                <p className="text-sm text-gray-600">Select time range for analysis (seconds):</p>
+                
+                {/* Visual Timeline */}
+                <div className="relative bg-gray-100 rounded-lg p-4">
+                  <div className="flex justify-between text-xs text-gray-500 mb-2">
+                    <span>0s</span>
+                    <span>{metadata.duration_seconds.toFixed(1)}s (Total: {metadata.duration_seconds.toFixed(1)}s)</span>
+                  </div>
+                  
+                  {/* Timeline bar */}
+                  <div className="relative h-2 bg-gray-200 rounded-full mb-4">
+                    <div 
+                      className="absolute h-2 bg-blue-500 rounded-full"
+                      style={{
+                        left: `${(timeFrameStart / metadata.duration_seconds) * 100}%`,
+                        width: `${((timeFrameEnd - timeFrameStart) / metadata.duration_seconds) * 100}%`
+                      }}
+                    />
+                  </div>
+                  
+                  {/* Range sliders */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Start Time (seconds):</label>
+                      <input
+                        type="range"
+                        min={0}
+                        max={metadata.duration_seconds}
+                        step={0.1}
+                        value={timeFrameStart}
+                        onChange={(e) => {
+                          const newStart = parseFloat(e.target.value);
+                          setTimeFrameStart(newStart);
+                          if (newStart >= timeFrameEnd) {
+                            setTimeFrameEnd(Math.min(newStart + 1, metadata.duration_seconds));
+                          }
+                        }}
+                        className="w-full mb-2"
+                      />
+                      <input
+                        type="number"
+                        value={timeFrameStart}
+                        onChange={(e) => {
+                          const newStart = Math.max(0, parseFloat(e.target.value) || 0);
+                          setTimeFrameStart(Math.min(newStart, timeFrameEnd - 0.1));
+                        }}
+                        step="0.1"
+                        min={0}
+                        max={timeFrameEnd - 0.1}
+                        className="w-full p-2 border border-gray-300 rounded text-sm"
+                        placeholder="Start time"
+                      />
+                    </div>
+                    
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">End Time (seconds):</label>
+                      <input
+                        type="range"
+                        min={timeFrameStart + 0.1}
+                        max={metadata.duration_seconds}
+                        step={0.1}
+                        value={timeFrameEnd}
+                        onChange={(e) => setTimeFrameEnd(parseFloat(e.target.value))}
+                        className="w-full mb-2"
+                      />
+                      <input
+                        type="number"
+                        value={timeFrameEnd}
+                        onChange={(e) => {
+                          const newEnd = Math.min(metadata.duration_seconds, parseFloat(e.target.value) || metadata.duration_seconds);
+                          setTimeFrameEnd(Math.max(newEnd, timeFrameStart + 0.1));
+                        }}
+                        step="0.1"
+                        min={timeFrameStart + 0.1}
+                        max={metadata.duration_seconds}
+                        className="w-full p-2 border border-gray-300 rounded text-sm"
+                        placeholder="End time"
+                      />
+                    </div>
+                  </div>
+                  
+                  {/* Quick selection buttons */}
+                  <div className="flex flex-wrap gap-2 mt-4">
+                    <button
+                      onClick={() => {
+                        setTimeFrameStart(0);
+                        setTimeFrameEnd(metadata.duration_seconds);
+                      }}
+                      className="px-3 py-1 text-xs bg-gray-200 hover:bg-gray-300 rounded"
+                    >
+                      Full Duration
+                    </button>
+                    <button
+                      onClick={() => {
+                        setTimeFrameStart(0);
+                        setTimeFrameEnd(Math.min(60, metadata.duration_seconds));
+                      }}
+                      className="px-3 py-1 text-xs bg-blue-100 hover:bg-blue-200 rounded"
+                    >
+                      First 60s
+                    </button>
+                    <button
+                      onClick={() => {
+                        const start = Math.max(0, metadata.duration_seconds - 60);
+                        setTimeFrameStart(start);
+                        setTimeFrameEnd(metadata.duration_seconds);
+                      }}
+                      className="px-3 py-1 text-xs bg-green-100 hover:bg-green-200 rounded"
+                    >
+                      Last 60s
+                    </button>
+                    <button
+                      onClick={() => {
+                        const duration = timeFrameEnd - timeFrameStart;
+                        const center = metadata.duration_seconds / 2;
+                        const start = Math.max(0, center - duration / 2);
+                        const end = Math.min(metadata.duration_seconds, start + duration);
+                        setTimeFrameStart(start);
+                        setTimeFrameEnd(end);
+                      }}
+                      className="px-3 py-1 text-xs bg-purple-100 hover:bg-purple-200 rounded"
+                    >
+                      Center
+                    </button>
+                  </div>
+                </div>
+                
+                <div className="bg-blue-50 p-3 rounded text-sm">
+                  <strong>Selected Duration:</strong> {(timeFrameEnd - timeFrameStart).toFixed(1)} seconds 
+                  ({timeFrameStart.toFixed(1)}s to {timeFrameEnd.toFixed(1)}s)
+                  <br />
+                  <strong>Percentage of total:</strong> {((timeFrameEnd - timeFrameStart) / metadata.duration_seconds * 100).toFixed(1)}%
+                </div>
+              </div>
+            )}
+            
+            {!useTimeFrame && (
+              <div className="text-sm text-gray-600">
+                Using full recording duration: {metadata.duration_seconds.toFixed(1)} seconds
+              </div>
+            )}
           </div>
         )}
 
