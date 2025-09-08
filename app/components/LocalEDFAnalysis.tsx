@@ -265,7 +265,7 @@ export default function LocalEDFAnalysis({ file, isDarkMode = false }: LocalEDFA
                 const fmax = (document.getElementById('fmax') as HTMLInputElement)?.value;
                 performAnalysis('psd', {
                   fmin: fmin ? parseFloat(fmin) : 0.5,
-                  fmax: fmax ? parseFloat(fmax) : 50
+                  fmax: fmax ? parseFloat(fmax) : 60
                 });
               }}
               className={`px-4 py-2 rounded-lg font-medium transition-colors ${
@@ -283,7 +283,7 @@ export default function LocalEDFAnalysis({ file, isDarkMode = false }: LocalEDFA
                 const fmax = (document.getElementById('fmax') as HTMLInputElement)?.value;
                 performAnalysis('snr', {
                   fmin: fmin ? parseFloat(fmin) : 1,
-                  fmax: fmax ? parseFloat(fmax) : 40
+                  fmax: fmax ? parseFloat(fmax) : 60
                 });
               }}
               className={`px-4 py-2 rounded-lg font-medium transition-colors ${
