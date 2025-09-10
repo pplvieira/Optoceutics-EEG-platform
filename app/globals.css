@@ -27,3 +27,34 @@ body {
   color: var(--foreground);
   font-family: 'Inter', system-ui, sans-serif;
 }
+
+/* P300 Experiment Flash Animations */
+@keyframes flash-white {
+  0% {
+    opacity: 0;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.95;
+    transform: scale(1.001);
+  }
+  100% {
+    opacity: 0.95;
+    transform: scale(1);
+  }
+}
+
+@keyframes flash-red {
+  0% {
+    opacity: 0;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.90;
+    transform: scale(1.002);
+  }
+  100% {
+    opacity: 0.90;
+    transform: scale(1);
+  }
+}

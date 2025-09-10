@@ -96,6 +96,23 @@ export default function ComprehensiveEDFDashboard() {
     pca_components: 5
   });
 
+  const [thetaBetaParams, setThetaBetaParams] = useState({
+    theta_min: 4,
+    theta_max: 7,
+    beta_min: 13,
+    beta_max: 30,
+    method: 'welch'
+  });
+
+  const [timeFreqParams, setTimeFreqParams] = useState({
+    freq_min: 1,
+    freq_max: 50,
+    freq_points: 100,
+    time_points: 200,
+    duration: 10,
+    start_time: 0
+  });
+
   const clearMessages = () => {
     setError(null);
     setSuccess(null);
@@ -594,6 +611,151 @@ export default function ComprehensiveEDFDashboard() {
                   Compute SNR
                 </button>
               </div>
+
+              {/* Theta-Beta Ratio Analysis */}
+              <div className="bg-gray-50 p-4 rounded-lg">
+                <h4 className="font-semibold mb-3">🧠 Theta-Beta Ratio</h4>
+                <div className="grid grid-cols-2 gap-2 mb-3">
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Theta Min (Hz):</label>
+                    <input
+                      type="number"
+                      value={thetaBetaParams.theta_min}
+                      onChange={(e) => setThetaBetaParams(prev => ({ ...prev, theta_min: parseFloat(e.target.value) }))}
+                      step="0.1"
+                      min="0"
+                      className="w-full p-2 border border-gray-300 rounded"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Theta Max (Hz):</label>
+                    <input
+                      type="number"
+                      value={thetaBetaParams.theta_max}
+                      onChange={(e) => setThetaBetaParams(prev => ({ ...prev, theta_max: parseFloat(e.target.value) }))}
+                      step="0.1"
+                      min="0"
+                      className="w-full p-2 border border-gray-300 rounded"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Beta Min (Hz):</label>
+                    <input
+                      type="number"
+                      value={thetaBetaParams.beta_min}
+                      onChange={(e) => setThetaBetaParams(prev => ({ ...prev, beta_min: parseFloat(e.target.value) }))}
+                      step="0.1"
+                      min="0"
+                      className="w-full p-2 border border-gray-300 rounded"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Beta Max (Hz):</label>
+                    <input
+                      type="number"
+                      value={thetaBetaParams.beta_max}
+                      onChange={(e) => setThetaBetaParams(prev => ({ ...prev, beta_max: parseFloat(e.target.value) }))}
+                      step="0.1"
+                      min="0"
+                      className="w-full p-2 border border-gray-300 rounded"
+                    />
+                  </div>
+                </div>
+                <div className="mb-3">
+                  <label className="block text-sm font-medium mb-1">Method:</label>
+                  <select
+                    value={thetaBetaParams.method}
+                    onChange={(e) => setThetaBetaParams(prev => ({ ...prev, method: e.target.value }))}
+                    className="w-full p-2 border border-gray-300 rounded"
+                  >
+                    <option value="welch">Welch</option>
+                    <option value="periodogram">Periodogram</option>
+                  </select>
+                </div>
+                <button
+                  onClick={() => performAnalysis('theta_beta_ratio', thetaBetaParams)}
+                  disabled={isAnalyzing}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded disabled:opacity-50"
+                >
+                  Compute Theta-Beta Ratio
+                </button>
+              </div>
+
+              {/* Time-Frequency Analysis */}
+              <div className="bg-gray-50 p-4 rounded-lg">
+                <h4 className="font-semibold mb-3">📈 Time-Frequency Analysis</h4>
+                <div className="grid grid-cols-2 gap-2 mb-3">
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Min Freq (Hz):</label>
+                    <input
+                      type="number"
+                      value={timeFreqParams.freq_min}
+                      onChange={(e) => setTimeFreqParams(prev => ({ ...prev, freq_min: parseFloat(e.target.value) }))}
+                      step="0.1"
+                      min="0"
+                      className="w-full p-2 border border-gray-300 rounded"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Max Freq (Hz):</label>
+                    <input
+                      type="number"
+                      value={timeFreqParams.freq_max}
+                      onChange={(e) => setTimeFreqParams(prev => ({ ...prev, freq_max: parseFloat(e.target.value) }))}
+                      step="0.1"
+                      min="1"
+                      className="w-full p-2 border border-gray-300 rounded"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Freq Points:</label>
+                    <input
+                      type="number"
+                      value={timeFreqParams.freq_points}
+                      onChange={(e) => setTimeFreqParams(prev => ({ ...prev, freq_points: parseInt(e.target.value) }))}
+                      min="10"
+                      className="w-full p-2 border border-gray-300 rounded"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Time Points:</label>
+                    <input
+                      type="number"
+                      value={timeFreqParams.time_points}
+                      onChange={(e) => setTimeFreqParams(prev => ({ ...prev, time_points: parseInt(e.target.value) }))}
+                      min="10"
+                      className="w-full p-2 border border-gray-300 rounded"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Duration (s):</label>
+                    <input
+                      type="number"
+                      value={timeFreqParams.duration}
+                      onChange={(e) => setTimeFreqParams(prev => ({ ...prev, duration: parseFloat(e.target.value) }))}
+                      min="1"
+                      className="w-full p-2 border border-gray-300 rounded"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Start Time (s):</label>
+                    <input
+                      type="number"
+                      value={timeFreqParams.start_time}
+                      onChange={(e) => setTimeFreqParams(prev => ({ ...prev, start_time: parseFloat(e.target.value) }))}
+                      min="0"
+                      className="w-full p-2 border border-gray-300 rounded"
+                    />
+                  </div>
+                </div>
+                <button
+                  onClick={() => performAnalysis('time_frequency', timeFreqParams)}
+                  disabled={isAnalyzing}
+                  className="w-full bg-red-600 hover:bg-red-700 text-white py-2 px-4 rounded disabled:opacity-50"
+                >
+                  Compute Spectrogram
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -611,6 +773,21 @@ export default function ComprehensiveEDFDashboard() {
                 <h4 className="text-lg font-semibold mb-4 capitalize">
                   {result.analysis_type.replace('_', ' ')} Analysis
                 </h4>
+                
+                {/* Display theta-beta ratio result if available */}
+                {result.analysis_type === 'theta_beta_ratio' && result.data && typeof result.data === 'object' && result.data !== null && 'ratio' in result.data && (
+                  <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                    <div className="text-2xl font-bold text-blue-800 mb-2">
+                      Theta/Beta Ratio: {typeof (result.data as any).ratio === 'number' ? ((result.data as any).ratio as number).toFixed(3) : String((result.data as any).ratio)}
+                    </div>
+                    {(result.data as any).theta_power && (result.data as any).beta_power && (
+                      <div className="text-sm text-gray-600">
+                        Theta Power: {((result.data as any).theta_power as number).toFixed(3)} | 
+                        Beta Power: {((result.data as any).beta_power as number).toFixed(3)}
+                      </div>
+                    )}
+                  </div>
+                )}
                 
                 {result.plot && (
                   <div className="mb-4">

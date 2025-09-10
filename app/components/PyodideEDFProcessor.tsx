@@ -115,7 +115,9 @@ export default function PyodideEDFProcessor() {
   const [analysisParams, setAnalysisParams] = useState({
     raw_signal: { duration: timeFrameEnd - timeFrameStart, start_time: 0 },
     psd: { fmin: 0.5, fmax: 50, method: 'welch' },
-    snr: { fmin: 1, fmax: 40, method: 'welch' }
+    snr: { fmin: 1, fmax: 40, method: 'welch' },
+    theta_beta_ratio: { theta_min: 4, theta_max: 7, beta_min: 13, beta_max: 30, method: 'welch' },
+    time_frequency: { freq_min: 1, freq_max: 50, freq_points: 100, time_points: 200, selected_channel: 0 }
   });
 
   // Update raw signal duration when time frame changes
@@ -1329,6 +1331,10 @@ def analyze_traditional(analysis_type, parameters, start_time=None, end_time=Non
             return analyze_psd(edf_reader, parameters)
         elif analysis_type == 'snr':
             return analyze_snr(edf_reader, parameters)
+        elif analysis_type == 'theta_beta_ratio':
+            return analyze_theta_beta_ratio(edf_reader, parameters)
+        elif analysis_type == 'time_frequency':
+            return analyze_time_frequency(edf_reader, parameters)
         else:
             return json.dumps({'error': f'Unknown analysis type: {analysis_type}', 'success': False})
             
@@ -1631,6 +1637,201 @@ def analyze_snr(edf_reader, parameters):
         'parameters': params,  # Use the converted parameters
         'success': True,
         'message': f'SNR computed using {method_title} method for frequency range {fmin}-{fmax} Hz'
+    })
+
+def analyze_theta_beta_ratio(edf_reader, parameters):
+    """Compute Theta-Beta Ratio"""
+    # Convert parameters to Python dict to avoid JsProxy issues
+    try:
+        if hasattr(parameters, 'to_py'):
+            params = parameters.to_py()
+        elif str(type(parameters)) == "<class 'pyodide.ffi.JsProxy'>":
+            # Manual conversion for JsProxy objects
+            params = {}
+            for key in parameters:
+                params[key] = parameters[key]
+        else:
+            params = dict(parameters)
+    except:
+        params = dict(parameters)
+    
+    theta_min = params.get('theta_min', 4)
+    theta_max = params.get('theta_max', 7)
+    beta_min = params.get('beta_min', 13)
+    beta_max = params.get('beta_max', 30)
+    method = params.get('method', 'welch')
+    selected_channels = params.get('selected_channels', ['all'])
+    
+    # Get basic info
+    sample_rate = get_sample_frequency(edf_reader)
+    all_channels = get_channel_names(edf_reader)
+    
+    if selected_channels == ['all'] or not selected_channels:
+        selected_channels = all_channels[:min(len(all_channels), 5)]
+    
+    fig, ax = plt.subplots(1, 1, figsize=(12, 8))
+    
+    theta_powers = []
+    beta_powers = []
+    ratios = []
+    
+    for ch_name in selected_channels:
+        ch_idx = all_channels.index(ch_name)
+        signal_data = get_signal_data(edf_reader, ch_idx)
+        
+        # Compute PSD using selected method
+        if method == 'welch':
+            freqs, psd = signal.welch(signal_data, fs=sample_rate, nperseg=2048)
+        else:  # periodogram
+            freqs = np.fft.rfftfreq(len(signal_data), 1/sample_rate)
+            fft_vals = np.fft.rfft(signal_data)
+            psd = (np.abs(fft_vals) ** 2) / (sample_rate * len(signal_data))
+        
+        # Calculate theta and beta power
+        theta_mask = (freqs >= theta_min) & (freqs <= theta_max)
+        beta_mask = (freqs >= beta_min) & (freqs <= beta_max)
+        
+        theta_power = np.mean(psd[theta_mask])
+        beta_power = np.mean(psd[beta_mask])
+        ratio = theta_power / beta_power if beta_power > 0 else 0
+        
+        theta_powers.append(theta_power)
+        beta_powers.append(beta_power)
+        ratios.append(ratio)
+        
+        # Plot PSD with highlighted bands
+        ax.semilogy(freqs, psd, label=f'{ch_name} (θ/β={ratio:.3f})', alpha=0.7)
+        
+        # Add semi-transparent bars for theta and beta ranges
+        ax.axvspan(theta_min, theta_max, alpha=0.2, color='blue', label='Theta' if ch_name == selected_channels[0] else "")
+        ax.axvspan(beta_min, beta_max, alpha=0.2, color='red', label='Beta' if ch_name == selected_channels[0] else "")
+    
+    ax.set_xlabel('Frequency (Hz)')
+    ax.set_ylabel('Power Spectral Density (V²/Hz)')
+    method_title = method.capitalize()
+    ax.set_title(f'Theta-Beta Ratio Analysis ({method_title})')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    ax.set_xlim(0, max(beta_max + 5, 40))
+    
+    # Convert to base64
+    buffer = io.BytesIO()
+    plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
+    buffer.seek(0)
+    plot_base64 = base64.b64encode(buffer.getvalue()).decode()
+    plt.close()
+    
+    # Calculate average values
+    avg_theta_power = np.mean(theta_powers)
+    avg_beta_power = np.mean(beta_powers)
+    avg_ratio = avg_theta_power / avg_beta_power if avg_beta_power > 0 else 0
+    
+    return json.dumps({
+        'analysis_type': 'theta_beta_ratio',
+        'plot_base64': plot_base64,
+        'data': {
+            'ratio': avg_ratio,
+            'theta_power': avg_theta_power,
+            'beta_power': avg_beta_power,
+            'individual_ratios': ratios,
+            'channels': selected_channels
+        },
+        'parameters': params,
+        'success': True,
+        'message': f'Theta-Beta ratio computed using {method_title} method. Theta: {theta_min}-{theta_max} Hz, Beta: {beta_min}-{beta_max} Hz'
+    })
+
+def analyze_time_frequency(edf_reader, parameters):
+    """Compute Time-Frequency Analysis (Spectrogram)"""
+    # Convert parameters to Python dict to avoid JsProxy issues
+    try:
+        if hasattr(parameters, 'to_py'):
+            params = parameters.to_py()
+        elif str(type(parameters)) == "<class 'pyodide.ffi.JsProxy'>":
+            # Manual conversion for JsProxy objects
+            params = {}
+            for key in parameters:
+                params[key] = parameters[key]
+        else:
+            params = dict(parameters)
+    except:
+        params = dict(parameters)
+    
+    freq_min = params.get('freq_min', 1)
+    freq_max = params.get('freq_max', 50)
+    freq_points = params.get('freq_points', 100)
+    time_points = params.get('time_points', 200)
+    selected_channel_idx = params.get('selected_channel', 0)
+    
+    # Get basic info
+    sample_rate = get_sample_frequency(edf_reader)
+    all_channels = get_channel_names(edf_reader)
+    
+    # Use the selected channel from dropdown
+    if selected_channel_idx < len(all_channels):
+        ch_name = all_channels[selected_channel_idx]
+    else:
+        ch_name = all_channels[0]  # fallback to first channel
+    
+    fig, ax = plt.subplots(1, 1, figsize=(12, 8))
+    
+    # Get signal data for the selected channel
+    signal_data = get_signal_data(edf_reader, selected_channel_idx)
+    
+    # Use the full signal (already cropped by time frame if enabled)
+    signal_segment = signal_data
+        
+    # Compute spectrogram
+    # Use scipy.signal.spectrogram for time-frequency analysis
+    nperseg = min(len(signal_segment) // 8, 512)  # Window size
+    noverlap = nperseg // 2  # Overlap
+    
+    frequencies, times, Sxx = signal.spectrogram(
+        signal_segment, 
+        fs=sample_rate,
+        nperseg=nperseg,
+        noverlap=noverlap
+    )
+    
+    # Filter to desired frequency range
+    freq_mask = (frequencies >= freq_min) & (frequencies <= freq_max)
+    frequencies_filtered = frequencies[freq_mask]
+    Sxx_filtered = Sxx[freq_mask, :]
+    
+    # Convert power to dB scale
+    Sxx_db = 10 * np.log10(Sxx_filtered + 1e-12)  # Add small constant to avoid log(0)
+    
+    # Create spectrogram plot
+    im = ax.pcolormesh(times, frequencies_filtered, Sxx_db, 
+                       shading='gouraud', cmap='viridis')
+    ax.set_xlabel('Time (s)')
+    ax.set_ylabel('Frequency (Hz)')
+    ax.set_title(f'Time-Frequency Analysis - {ch_name}')
+    ax.set_ylim(freq_min, freq_max)
+    
+    # Add colorbar
+    plt.colorbar(im, ax=ax, label='Power (dB)')
+    
+    plt.tight_layout()
+    
+    # Convert to base64
+    buffer = io.BytesIO()
+    plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
+    buffer.seek(0)
+    plot_base64 = base64.b64encode(buffer.getvalue()).decode()
+    plt.close()
+    
+    return json.dumps({
+        'analysis_type': 'time_frequency',
+        'plot_base64': plot_base64,
+        'data': {
+            'freq_range': [freq_min, freq_max],
+            'channel': ch_name,
+            'channel_index': selected_channel_idx
+        },
+        'parameters': params,
+        'success': True,
+        'message': f'Time-frequency analysis computed for channel {ch_name}. Frequency range: {freq_min}-{freq_max} Hz'
     })
 
 def test_spectrum_methods():
@@ -2258,6 +2459,10 @@ export_modified_edf()
         parameters = analysisParams.psd;
       } else if (analysisType === 'snr') {
         parameters = analysisParams.snr;
+      } else if (analysisType === 'theta_beta_ratio') {
+        parameters = analysisParams.theta_beta_ratio;
+      } else if (analysisType === 'time_frequency') {
+        parameters = analysisParams.time_frequency;
       }
 
       // Set parameters in Python - convert to ensure proper serialization
@@ -2453,6 +2658,21 @@ export_modified_edf()
               
               {!isCollapsed && (
                 <div className="p-3">
+                  {/* Display theta-beta ratio result if available */}
+                  {result.analysis_type === 'theta_beta_ratio' && result.data && typeof result.data === 'object' && result.data !== null && 'ratio' in result.data && (
+                    <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                      <div className="text-2xl font-bold text-blue-800 mb-2">
+                        Theta/Beta Ratio: {typeof result.data.ratio === 'number' ? result.data.ratio.toFixed(3) : String(result.data.ratio)}
+                      </div>
+                      {result.data.theta_power && result.data.beta_power && (
+                        <div className="text-sm text-gray-600">
+                          Theta Power: {(result.data.theta_power as number).toFixed(3)} | 
+                          Beta Power: {(result.data.beta_power as number).toFixed(3)}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  
                   {result.plot_base64 && (
                     <div className="mb-4">
                       <img 
@@ -3417,6 +3637,198 @@ export_modified_edf()
                     <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white mr-1"></div>
                   )}
                   Compute SNR
+                </button>
+              </div>
+
+              {/* Theta-Beta Ratio */}
+              <div className="bg-gray-50 p-4 rounded-lg">
+                <h4 className="font-semibold mb-3">🧠 Theta-Beta Ratio</h4>
+                <div className="grid grid-cols-2 gap-2 mb-3">
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Theta Min (Hz):</label>
+                    <input
+                      type="number"
+                      value={analysisParams.theta_beta_ratio.theta_min}
+                      onChange={(e) => setAnalysisParams(prev => ({
+                        ...prev,
+                        theta_beta_ratio: { ...prev.theta_beta_ratio, theta_min: parseFloat(e.target.value) }
+                      }))}
+                      step="0.1"
+                      min="0"
+                      className="w-full p-2 border border-gray-300 rounded text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Theta Max (Hz):</label>
+                    <input
+                      type="number"
+                      value={analysisParams.theta_beta_ratio.theta_max}
+                      onChange={(e) => setAnalysisParams(prev => ({
+                        ...prev,
+                        theta_beta_ratio: { ...prev.theta_beta_ratio, theta_max: parseFloat(e.target.value) }
+                      }))}
+                      step="0.1"
+                      min="0"
+                      className="w-full p-2 border border-gray-300 rounded text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Beta Min (Hz):</label>
+                    <input
+                      type="number"
+                      value={analysisParams.theta_beta_ratio.beta_min}
+                      onChange={(e) => setAnalysisParams(prev => ({
+                        ...prev,
+                        theta_beta_ratio: { ...prev.theta_beta_ratio, beta_min: parseFloat(e.target.value) }
+                      }))}
+                      step="0.1"
+                      min="0"
+                      className="w-full p-2 border border-gray-300 rounded text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Beta Max (Hz):</label>
+                    <input
+                      type="number"
+                      value={analysisParams.theta_beta_ratio.beta_max}
+                      onChange={(e) => setAnalysisParams(prev => ({
+                        ...prev,
+                        theta_beta_ratio: { ...prev.theta_beta_ratio, beta_max: parseFloat(e.target.value) }
+                      }))}
+                      step="0.1"
+                      min="0"
+                      className="w-full p-2 border border-gray-300 rounded text-sm"
+                    />
+                  </div>
+                </div>
+                <div className="mb-3">
+                  <label className="block text-sm font-medium mb-1">Spectrum Method:</label>
+                  <div className="flex bg-gray-100 rounded-lg p-1">
+                    <button
+                      onClick={() => setAnalysisParams(prev => ({
+                        ...prev,
+                        theta_beta_ratio: { ...prev.theta_beta_ratio, method: 'welch' }
+                      }))}
+                      className={`flex-1 px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                        analysisParams.theta_beta_ratio.method === 'welch' 
+                          ? 'bg-blue-600 text-white shadow-sm' 
+                          : 'text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      Welch
+                    </button>
+                    <button
+                      onClick={() => setAnalysisParams(prev => ({
+                        ...prev,
+                        theta_beta_ratio: { ...prev.theta_beta_ratio, method: 'periodogram' }
+                      }))}
+                      className={`flex-1 px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                        analysisParams.theta_beta_ratio.method === 'periodogram' 
+                          ? 'bg-blue-600 text-white shadow-sm' 
+                          : 'text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      Periodogram
+                    </button>
+                  </div>
+                </div>
+                <button
+                  onClick={() => runTraditionalAnalysis('theta_beta_ratio')}
+                  disabled={isAnalyzing}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded text-sm disabled:opacity-50 flex items-center justify-center"
+                >
+                  {isAnalyzing && (
+                    <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white mr-1"></div>
+                  )}
+                  Compute Theta-Beta Ratio
+                </button>
+              </div>
+
+              {/* Time-Frequency Analysis */}
+              <div className="bg-gray-50 p-4 rounded-lg">
+                <h4 className="font-semibold mb-3">📈 Time-Frequency Analysis</h4>
+                <div className="grid grid-cols-2 gap-2 mb-3">
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Min Freq (Hz):</label>
+                    <input
+                      type="number"
+                      value={analysisParams.time_frequency.freq_min}
+                      onChange={(e) => setAnalysisParams(prev => ({
+                        ...prev,
+                        time_frequency: { ...prev.time_frequency, freq_min: parseFloat(e.target.value) }
+                      }))}
+                      step="0.1"
+                      min="0"
+                      className="w-full p-2 border border-gray-300 rounded text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Max Freq (Hz):</label>
+                    <input
+                      type="number"
+                      value={analysisParams.time_frequency.freq_max}
+                      onChange={(e) => setAnalysisParams(prev => ({
+                        ...prev,
+                        time_frequency: { ...prev.time_frequency, freq_max: parseFloat(e.target.value) }
+                      }))}
+                      step="0.1"
+                      min="1"
+                      className="w-full p-2 border border-gray-300 rounded text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Freq Points:</label>
+                    <input
+                      type="number"
+                      value={analysisParams.time_frequency.freq_points}
+                      onChange={(e) => setAnalysisParams(prev => ({
+                        ...prev,
+                        time_frequency: { ...prev.time_frequency, freq_points: parseInt(e.target.value) }
+                      }))}
+                      min="10"
+                      className="w-full p-2 border border-gray-300 rounded text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Time Points:</label>
+                    <input
+                      type="number"
+                      value={analysisParams.time_frequency.time_points}
+                      onChange={(e) => setAnalysisParams(prev => ({
+                        ...prev,
+                        time_frequency: { ...prev.time_frequency, time_points: parseInt(e.target.value) }
+                      }))}
+                      min="10"
+                      className="w-full p-2 border border-gray-300 rounded text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Channel:</label>
+                    <select
+                      value={analysisParams.time_frequency.selected_channel}
+                      onChange={(e) => setAnalysisParams(prev => ({
+                        ...prev,
+                        time_frequency: { ...prev.time_frequency, selected_channel: parseInt(e.target.value) }
+                      }))}
+                      className="w-full p-2 border border-gray-300 rounded text-sm"
+                    >
+                      {metadata?.channel_names?.map((channel: string, index: number) => (
+                        <option key={index} value={index}>
+                          {channel}
+                        </option>
+                      )) || <option value={0}>Loading channels...</option>}
+                    </select>
+                  </div>
+                </div>
+                <button
+                  onClick={() => runTraditionalAnalysis('time_frequency')}
+                  disabled={isAnalyzing}
+                  className="w-full bg-red-600 hover:bg-red-700 text-white py-2 px-4 rounded text-sm disabled:opacity-50 flex items-center justify-center"
+                >
+                  {isAnalyzing && (
+                    <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white mr-1"></div>
+                  )}
+                  Compute Spectrogram
                 </button>
               </div>
             </div>

@@ -131,6 +131,30 @@ export default function LocalEDFAnalysis({ file, isDarkMode = false }: LocalEDFA
           >
             {loading.snr ? 'Computing...' : 'SNR Spectrum'}
           </button>
+
+          <button
+            onClick={() => performAnalysis('theta_beta_ratio')}
+            disabled={loading.theta_beta_ratio}
+            className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+              isDarkMode
+                ? 'bg-blue-700 text-white hover:bg-blue-600'
+                : 'bg-blue-600 text-white hover:bg-blue-700'
+            } disabled:opacity-50`}
+          >
+            {loading.theta_beta_ratio ? 'Computing...' : 'Theta-Beta Ratio'}
+          </button>
+
+          <button
+            onClick={() => performAnalysis('time_frequency')}
+            disabled={loading.time_frequency}
+            className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+              isDarkMode
+                ? 'bg-red-700 text-white hover:bg-red-600'
+                : 'bg-red-600 text-white hover:bg-red-700'
+            } disabled:opacity-50`}
+          >
+            {loading.time_frequency ? 'Computing...' : 'Time-Frequency'}
+          </button>
         </div>
 
         {/* Parameter Controls */}
@@ -296,6 +320,267 @@ export default function LocalEDFAnalysis({ file, isDarkMode = false }: LocalEDFA
             </button>
           </div>
         </div>
+
+        {/* Theta-Beta Ratio Parameters */}
+        <div className={`p-4 rounded-lg border ${
+          isDarkMode 
+            ? 'bg-[var(--dark-bg-secondary)] border-[var(--dark-border)]' 
+            : 'bg-gray-50 border-gray-200'
+        }`}>
+          <h4 className={`text-md font-semibold mb-3 ${
+            isDarkMode ? 'text-[var(--dark-text)]' : 'text-gray-800'
+          }`}>
+            Theta-Beta Ratio Parameters
+          </h4>
+          
+          <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
+            <div>
+              <label className={`block text-sm font-medium mb-1 ${
+                isDarkMode ? 'text-[var(--dark-text-secondary)]' : 'text-gray-700'
+              }`}>
+                Theta Min (Hz)
+              </label>
+              <input
+                type="number"
+                defaultValue={4}
+                min={0.1}
+                step={0.1}
+                className={`w-full px-3 py-2 rounded border ${
+                  isDarkMode 
+                    ? 'bg-[var(--dark-card)] border-[var(--dark-border)] text-[var(--dark-text)]' 
+                    : 'bg-white border-gray-300'
+                }`}
+                id="thetaMin"
+              />
+            </div>
+            
+            <div>
+              <label className={`block text-sm font-medium mb-1 ${
+                isDarkMode ? 'text-[var(--dark-text-secondary)]' : 'text-gray-700'
+              }`}>
+                Theta Max (Hz)
+              </label>
+              <input
+                type="number"
+                defaultValue={7}
+                min={0.1}
+                step={0.1}
+                className={`w-full px-3 py-2 rounded border ${
+                  isDarkMode 
+                    ? 'bg-[var(--dark-card)] border-[var(--dark-border)] text-[var(--dark-text)]' 
+                    : 'bg-white border-gray-300'
+                }`}
+                id="thetaMax"
+              />
+            </div>
+            
+            <div>
+              <label className={`block text-sm font-medium mb-1 ${
+                isDarkMode ? 'text-[var(--dark-text-secondary)]' : 'text-gray-700'
+              }`}>
+                Beta Min (Hz)
+              </label>
+              <input
+                type="number"
+                defaultValue={13}
+                min={1}
+                step={0.1}
+                className={`w-full px-3 py-2 rounded border ${
+                  isDarkMode 
+                    ? 'bg-[var(--dark-card)] border-[var(--dark-border)] text-[var(--dark-text)]' 
+                    : 'bg-white border-gray-300'
+                }`}
+                id="betaMin"
+              />
+            </div>
+            
+            <div>
+              <label className={`block text-sm font-medium mb-1 ${
+                isDarkMode ? 'text-[var(--dark-text-secondary)]' : 'text-gray-700'
+              }`}>
+                Beta Max (Hz)
+              </label>
+              <input
+                type="number"
+                defaultValue={30}
+                min={1}
+                step={0.1}
+                className={`w-full px-3 py-2 rounded border ${
+                  isDarkMode 
+                    ? 'bg-[var(--dark-card)] border-[var(--dark-border)] text-[var(--dark-text)]' 
+                    : 'bg-white border-gray-300'
+                }`}
+                id="betaMax"
+              />
+            </div>
+
+            <div>
+              <label className={`block text-sm font-medium mb-1 ${
+                isDarkMode ? 'text-[var(--dark-text-secondary)]' : 'text-gray-700'
+              }`}>
+                Method
+              </label>
+              <select
+                className={`w-full px-3 py-2 rounded border ${
+                  isDarkMode 
+                    ? 'bg-[var(--dark-card)] border-[var(--dark-border)] text-[var(--dark-text)]' 
+                    : 'bg-white border-gray-300'
+                }`}
+                id="thetaBetaMethod"
+                defaultValue="welch"
+              >
+                <option value="welch">Welch</option>
+                <option value="periodogram">Periodogram</option>
+              </select>
+            </div>
+            
+            <button
+              onClick={() => {
+                const thetaMin = (document.getElementById('thetaMin') as HTMLInputElement)?.value;
+                const thetaMax = (document.getElementById('thetaMax') as HTMLInputElement)?.value;
+                const betaMin = (document.getElementById('betaMin') as HTMLInputElement)?.value;
+                const betaMax = (document.getElementById('betaMax') as HTMLInputElement)?.value;
+                const method = (document.getElementById('thetaBetaMethod') as HTMLSelectElement)?.value;
+                performAnalysis('theta_beta_ratio', {
+                  theta_min: thetaMin ? parseFloat(thetaMin) : 4,
+                  theta_max: thetaMax ? parseFloat(thetaMax) : 7,
+                  beta_min: betaMin ? parseFloat(betaMin) : 13,
+                  beta_max: betaMax ? parseFloat(betaMax) : 30,
+                  method: method || 'welch'
+                });
+              }}
+              className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                isDarkMode
+                  ? 'bg-blue-700 text-white hover:bg-blue-600'
+                  : 'bg-blue-600 text-white hover:bg-blue-700'
+              }`}
+            >
+              Compute Ratio
+            </button>
+          </div>
+        </div>
+
+        {/* Time-Frequency Analysis Parameters */}
+        <div className={`p-4 rounded-lg border ${
+          isDarkMode 
+            ? 'bg-[var(--dark-bg-secondary)] border-[var(--dark-border)]' 
+            : 'bg-gray-50 border-gray-200'
+        }`}>
+          <h4 className={`text-md font-semibold mb-3 ${
+            isDarkMode ? 'text-[var(--dark-text)]' : 'text-gray-800'
+          }`}>
+            Time-Frequency Analysis Parameters
+          </h4>
+          
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+            <div>
+              <label className={`block text-sm font-medium mb-1 ${
+                isDarkMode ? 'text-[var(--dark-text-secondary)]' : 'text-gray-700'
+              }`}>
+                Min Freq (Hz)
+              </label>
+              <input
+                type="number"
+                defaultValue={1}
+                min={0.1}
+                step={0.1}
+                className={`w-full px-3 py-2 rounded border ${
+                  isDarkMode 
+                    ? 'bg-[var(--dark-card)] border-[var(--dark-border)] text-[var(--dark-text)]' 
+                    : 'bg-white border-gray-300'
+                }`}
+                id="tfFreqMin"
+              />
+            </div>
+            
+            <div>
+              <label className={`block text-sm font-medium mb-1 ${
+                isDarkMode ? 'text-[var(--dark-text-secondary)]' : 'text-gray-700'
+              }`}>
+                Max Freq (Hz)
+              </label>
+              <input
+                type="number"
+                defaultValue={50}
+                min={1}
+                step={0.1}
+                className={`w-full px-3 py-2 rounded border ${
+                  isDarkMode 
+                    ? 'bg-[var(--dark-card)] border-[var(--dark-border)] text-[var(--dark-text)]' 
+                    : 'bg-white border-gray-300'
+                }`}
+                id="tfFreqMax"
+              />
+            </div>
+            
+            <div>
+              <label className={`block text-sm font-medium mb-1 ${
+                isDarkMode ? 'text-[var(--dark-text-secondary)]' : 'text-gray-700'
+              }`}>
+                Freq Points
+              </label>
+              <input
+                type="number"
+                defaultValue={100}
+                min={10}
+                step={1}
+                className={`w-full px-3 py-2 rounded border ${
+                  isDarkMode 
+                    ? 'bg-[var(--dark-card)] border-[var(--dark-border)] text-[var(--dark-text)]' 
+                    : 'bg-white border-gray-300'
+                }`}
+                id="tfFreqPoints"
+              />
+            </div>
+            
+            <div>
+              <label className={`block text-sm font-medium mb-1 ${
+                isDarkMode ? 'text-[var(--dark-text-secondary)]' : 'text-gray-700'
+              }`}>
+                Time Points
+              </label>
+              <input
+                type="number"
+                defaultValue={200}
+                min={10}
+                step={1}
+                className={`w-full px-3 py-2 rounded border ${
+                  isDarkMode 
+                    ? 'bg-[var(--dark-card)] border-[var(--dark-border)] text-[var(--dark-text)]' 
+                    : 'bg-white border-gray-300'
+                }`}
+                id="tfTimePoints"
+              />
+            </div>
+            
+            <button
+              onClick={() => {
+                const freqMin = (document.getElementById('tfFreqMin') as HTMLInputElement)?.value;
+                const freqMax = (document.getElementById('tfFreqMax') as HTMLInputElement)?.value;
+                const freqPoints = (document.getElementById('tfFreqPoints') as HTMLInputElement)?.value;
+                const timePoints = (document.getElementById('tfTimePoints') as HTMLInputElement)?.value;
+                const duration = (document.getElementById('plotDuration') as HTMLInputElement)?.value;
+                const startTime = (document.getElementById('startTime') as HTMLInputElement)?.value;
+                
+                performAnalysis('time_frequency', {
+                  freq_min: freqMin ? parseFloat(freqMin) : 1,
+                  freq_max: freqMax ? parseFloat(freqMax) : 50,
+                  freq_points: freqPoints ? parseInt(freqPoints) : 100,
+                  time_points: timePoints ? parseInt(timePoints) : 200,
+                  duration: duration ? parseFloat(duration) : 10,
+                  start_time: startTime ? parseFloat(startTime) : 0
+                });
+              }}
+              className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                isDarkMode
+                  ? 'bg-red-700 text-white hover:bg-red-600'
+                  : 'bg-red-600 text-white hover:bg-red-700'
+              }`}
+            >
+              Compute Spectrogram
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Analysis Results */}
@@ -308,8 +593,31 @@ export default function LocalEDFAnalysis({ file, isDarkMode = false }: LocalEDFA
           <h4 className={`text-md font-semibold mb-3 ${
             isDarkMode ? 'text-[var(--dark-text)]' : 'text-gray-800'
           }`}>
-            Analysis Results ({analysisResult.analysis_type?.toUpperCase() || analysisResult.type})
+            Analysis Results ({analysisResult.analysis_type?.toUpperCase() || analysisResult.type?.toUpperCase()})
           </h4>
+          
+          {/* Display theta-beta ratio result if available */}
+          {analysisResult.data && typeof analysisResult.data === 'object' && analysisResult.data !== null && 'ratio' in analysisResult.data && (
+            <div className={`mb-4 p-3 rounded border ${
+              isDarkMode 
+                ? 'bg-[var(--dark-card)] border-[var(--dark-border)]' 
+                : 'bg-blue-50 border-blue-200'
+            }`}>
+              <div className={`text-lg font-bold ${
+                isDarkMode ? 'text-[var(--gold)]' : 'text-blue-800'
+              }`}>
+                Theta/Beta Ratio: {typeof (analysisResult.data as any).ratio === 'number' ? ((analysisResult.data as any).ratio as number).toFixed(3) : String((analysisResult.data as any).ratio)}
+              </div>
+              {(analysisResult.data as any).theta_power && (analysisResult.data as any).beta_power && (
+                <div className={`text-sm mt-1 ${
+                  isDarkMode ? 'text-[var(--dark-text-secondary)]' : 'text-gray-600'
+                }`}>
+                  Theta Power: {((analysisResult.data as any).theta_power as number).toFixed(3)} | 
+                  Beta Power: {((analysisResult.data as any).beta_power as number).toFixed(3)}
+                </div>
+              )}
+            </div>
+          )}
           
           {analysisResult.plot && (
             <div className="text-center mb-4">
