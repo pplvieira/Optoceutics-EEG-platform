@@ -606,14 +606,14 @@ export default function LocalEDFAnalysis({ file, isDarkMode = false }: LocalEDFA
               <div className={`text-lg font-bold ${
                 isDarkMode ? 'text-[var(--gold)]' : 'text-blue-800'
               }`}>
-                Theta/Beta Ratio: {typeof (analysisResult.data as any).ratio === 'number' ? ((analysisResult.data as any).ratio as number).toFixed(3) : String((analysisResult.data as any).ratio)}
+                Theta/Beta Ratio: {typeof (analysisResult.data as Record<string, unknown>).ratio === 'number' ? ((analysisResult.data as Record<string, unknown>).ratio as number).toFixed(3) : String((analysisResult.data as Record<string, unknown>).ratio)}
               </div>
-              {(analysisResult.data as any).theta_power && (analysisResult.data as any).beta_power && (
+              {typeof (analysisResult.data as Record<string, unknown>).theta_power === 'number' && typeof (analysisResult.data as Record<string, unknown>).beta_power === 'number' && (
                 <div className={`text-sm mt-1 ${
                   isDarkMode ? 'text-[var(--dark-text-secondary)]' : 'text-gray-600'
                 }`}>
-                  Theta Power: {((analysisResult.data as any).theta_power as number).toFixed(3)} | 
-                  Beta Power: {((analysisResult.data as any).beta_power as number).toFixed(3)}
+                  Theta Power: {((analysisResult.data as Record<string, unknown>).theta_power as number).toFixed(3)} | 
+                  Beta Power: {((analysisResult.data as Record<string, unknown>).beta_power as number).toFixed(3)}
                 </div>
               )}
             </div>

@@ -36,8 +36,8 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState(0);
   const [uploadedFiles, setUploadedFiles] = useState<EDFFile[]>([]);
   const [selectedFile, setSelectedFile] = useState<EDFFile | null>(null);
-  const [runningExperiment, setRunningExperiment] = useState<any | null>(null);
-  const [experimentResults, setExperimentResults] = useState<any[]>([]);
+  const [runningExperiment, setRunningExperiment] = useState<Record<string, unknown> | null>(null);
+  const [experimentResults, setExperimentResults] = useState<Record<string, unknown>[]>([]);
 
   const currentTabs = currentMode === 'developer' ? DeveloperTabs : ExperimentTabs;
 
@@ -220,9 +220,7 @@ export default function Home() {
             ) : (
               <ExperimentTabContent 
                 tabIndex={activeTab} 
-                tabName={currentTabs[activeTab]}
                 onStartExperiment={setRunningExperiment}
-                experimentResults={experimentResults}
               />
             )}
           </div>
@@ -276,9 +274,9 @@ export default function Home() {
         {/* Running Experiment Overlay */}
         {runningExperiment && (
           <P300Experiment
-            config={runningExperiment}
+            config={runningExperiment as { id: string; duration: number }}
             onComplete={(data) => {
-              setExperimentResults(prev => [...prev, data]);
+              setExperimentResults(prev => [...prev, data as unknown as Record<string, unknown>]);
               setRunningExperiment(null);
               console.log('Experiment completed:', data);
             }}
@@ -594,13 +592,10 @@ function ResultsTab() {
 
 function ExperimentTabContent({ 
   tabIndex, 
-  onStartExperiment,
-  experimentResults 
+  onStartExperiment
 }: { 
   tabIndex: number; 
-  tabName: string;
-  onStartExperiment: (experimentConfig: any) => void;
-  experimentResults: any[];
+  onStartExperiment: (experimentConfig: Record<string, unknown>) => void;
 }) {
   const [showExperimentModal, setShowExperimentModal] = useState(false);
   const [selectedExperiment, setSelectedExperiment] = useState<string | null>(null);

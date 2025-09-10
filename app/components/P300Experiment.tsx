@@ -90,7 +90,7 @@ const P300Experiment: React.FC<P300ExperimentProps> = ({ onComplete, onCancel, c
   const [countdown, setCountdown] = useState(3);
   const [stimulusVisible, setStimulusVisible] = useState(false);
   const [currentStimulusType, setCurrentStimulusType] = useState<'target' | 'standard' | null>(null);
-  const [completedData, setCompletedData] = useState<any>(null);
+  const [completedData, setCompletedData] = useState<ExperimentData | null>(null);
   const [completionStatus, setCompletionStatus] = useState<'completed' | 'interrupted' | null>(null);
   const [experimentData, setExperimentData] = useState<ExperimentData>({
     experimentId: 'p300-1',
@@ -116,7 +116,7 @@ const P300Experiment: React.FC<P300ExperimentProps> = ({ onComplete, onCancel, c
   const TARGET_PROBABILITY = 0.20; // 20% target stimuli (oddball)
   const JITTER_RANGE = 0; //50; // ±50ms jitter for more realistic timing
 
-  const addEvent = useCallback((type: ExperimentData['events'][0]['type'], data: any = {}) => {
+  const addEvent = useCallback((type: ExperimentData['events'][0]['type'], data: Record<string, unknown> = {}) => {
     const absoluteTimestamp = Date.now(); // Use absolute timestamp
     const relativeTimestamp = absoluteTimestamp - startTimeRef.current; // Keep relative for compatibility
     console.log('📝 addEvent called:', type, 'at absolute:', absoluteTimestamp, 'relative:', relativeTimestamp, 'with data:', data);
@@ -138,10 +138,10 @@ const P300Experiment: React.FC<P300ExperimentProps> = ({ onComplete, onCancel, c
       try {
         if (containerRef.current.requestFullscreen) {
           await containerRef.current.requestFullscreen();
-        } else if ((containerRef.current as any).webkitRequestFullscreen) {
-          await (containerRef.current as any).webkitRequestFullscreen();
-        } else if ((containerRef.current as any).msRequestFullscreen) {
-          await (containerRef.current as any).msRequestFullscreen();
+        } else if ((containerRef.current as unknown as { webkitRequestFullscreen?: () => Promise<void> }).webkitRequestFullscreen) {
+          await (containerRef.current as unknown as { webkitRequestFullscreen: () => Promise<void> }).webkitRequestFullscreen();
+        } else if ((containerRef.current as unknown as { msRequestFullscreen?: () => Promise<void> }).msRequestFullscreen) {
+          await (containerRef.current as unknown as { msRequestFullscreen: () => Promise<void> }).msRequestFullscreen();
         }
         setIsFullscreen(true);
       } catch (error) {
@@ -155,10 +155,10 @@ const P300Experiment: React.FC<P300ExperimentProps> = ({ onComplete, onCancel, c
     try {
       if (document.exitFullscreen) {
         await document.exitFullscreen();
-      } else if ((document as any).webkitExitFullscreen) {
-        await (document as any).webkitExitFullscreen();
-      } else if ((document as any).msExitFullscreen) {
-        await (document as any).msExitFullscreen();
+      } else if ((document as unknown as { webkitExitFullscreen?: () => Promise<void> }).webkitExitFullscreen) {
+        await (document as unknown as { webkitExitFullscreen: () => Promise<void> }).webkitExitFullscreen();
+      } else if ((document as unknown as { msExitFullscreen?: () => Promise<void> }).msExitFullscreen) {
+        await (document as unknown as { msExitFullscreen: () => Promise<void> }).msExitFullscreen();
       }
     } catch (error) {
       console.warn('Error exiting fullscreen:', error);
