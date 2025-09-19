@@ -4,13 +4,16 @@ import { useState, useEffect } from 'react';
 import Image from 'next/image';
 import ComprehensiveEDFDashboard from './components/ComprehensiveEDFDashboard';
 import PyodideEDFProcessor from './components/PyodideEDFProcessor';
+import SSVEPAnalysisTool from './components/SSVEPAnalysisTool';
 import VercelEDFUpload from './components/VercelEDFUpload';
 import VercelEDFAnalysis from './components/VercelEDFAnalysis';
 import P300Experiment from './components/P300Experiment';
+import AuditoryStimulus40Hz from './components/AuditoryStimulus40Hz';
+import QuestionnaireSystem from './components/QuestionnaireSystem';
 import { EDFFile } from './types/edf';
 import { experimentDB, ExperimentResult } from './utils/experimentDatabase';
 
-type DesktopMode = 'developer' | 'experiment' | 'local' | 'browser';
+type DesktopMode = 'developer' | 'experiment' | 'ssvep' | 'browser';
 
 const DeveloperTabs = [
   'Data Collection',
@@ -82,16 +85,16 @@ export default function Home() {
               </button>
               <button
                 onClick={() => {
-                  setCurrentMode('local');
+                  setCurrentMode('ssvep');
                   setActiveTab(0);
                 }}
                 className={`px-3 py-2 rounded-md font-medium transition-all text-sm ${
-                  currentMode === 'local'
+                  currentMode === 'ssvep'
                     ? 'bg-[var(--gold)] text-[var(--navy)] shadow-lg'
                     : 'text-blue-200 hover:text-white hover:bg-blue-700'
                 }`}
               >
-                Local Backend
+                SSVEP Tool
               </button>
               <button
                 onClick={() => {
@@ -129,16 +132,16 @@ export default function Home() {
         {/* Mode Description */}
         <div className="mb-8 text-center">
           <h2 className={`text-3xl font-bold mb-4 ${
-            currentMode === 'developer' || currentMode === 'local' || currentMode === 'browser'
+            currentMode === 'developer' || currentMode === 'ssvep' || currentMode === 'browser'
               ? 'text-[var(--dark-text)]' 
               : 'text-[var(--navy)]'
           }`}>
             {currentMode === 'browser' ? 'Browser-Based Python Processing' :
              currentMode === 'developer' ? 'Technical Dashboard' : 
-             currentMode === 'local' ? 'Local Backend Processing' : 'Participant Interface'}
+             currentMode === 'ssvep' ? 'SSVEP Detection Tool' : 'Participant Interface'}
           </h2>
           <p className={`max-w-3xl mx-auto ${
-            currentMode === 'developer' || currentMode === 'local' || currentMode === 'browser'
+            currentMode === 'developer' || currentMode === 'ssvep' || currentMode === 'browser'
               ? 'text-[var(--dark-text-secondary)]' 
               : 'text-gray-600'
           }`}>
@@ -146,8 +149,8 @@ export default function Home() {
               ? 'Full Python-powered EEG analysis running entirely in your browser using WebAssembly. No server required, no file uploads, no size limits. Complete privacy with pyedflib, NumPy, SciPy, and scikit-learn.'
               : currentMode === 'developer' 
               ? 'Comprehensive tools for EEG data collection, analysis, and visualization. Configure experiments, process signals, and generate insights.'
-              : currentMode === 'local' 
-              ? 'Advanced EEG processing with local Python backend. Full scientific computing stack with SSVEP analysis, PCA, and large file support.'
+              : currentMode === 'ssvep' 
+              ? 'Automated SSVEP analysis and detection tool. Upload EDF files and CSV annotations to extract, synchronize, and analyze stimulation periods with power spectral density, SNR calculations, and comprehensive reporting.'
               : 'Welcome to your experiment session. Follow the guided tasks and interact with the activities designed to capture neural responses.'
             }
           </p>
@@ -159,13 +162,13 @@ export default function Home() {
           <PyodideEDFProcessor />
         )}
         
-        {/* Local Backend Mode */}
-        {currentMode === 'local' && (
-          <ComprehensiveEDFDashboard />
+        {/* SSVEP Tool Mode */}
+        {currentMode === 'ssvep' && (
+          <SSVEPAnalysisTool />
         )}
         
         {/* Other Modes */}
-        {currentMode !== 'local' && currentMode !== 'browser' && (
+        {currentMode !== 'ssvep' && currentMode !== 'browser' && (
         <div className={`rounded-2xl shadow-xl border overflow-hidden transition-colors duration-300 ${
           currentMode === 'developer' 
             ? 'bg-[var(--dark-card)] border-[var(--dark-border)]' 
@@ -273,18 +276,82 @@ export default function Home() {
 
         {/* Running Experiment Overlay */}
         {runningExperiment && (
-          <P300Experiment
-            config={runningExperiment as { id: string; duration: number }}
-            onComplete={(data) => {
-              setExperimentResults(prev => [...prev, data as unknown as Record<string, unknown>]);
-              setRunningExperiment(null);
-              console.log('Experiment completed:', data);
-            }}
-            onCancel={() => {
-              setRunningExperiment(null);
-              console.log('Experiment cancelled');
-            }}
-          />
+          <>
+            {(runningExperiment as { id: string }).id === 'p300-1' && (
+              <P300Experiment
+                config={runningExperiment as { id: string; duration: number }}
+                onComplete={(data) => {
+                  setExperimentResults(prev => [...prev, data as unknown as Record<string, unknown>]);
+                  setRunningExperiment(null);
+                  console.log('Experiment completed:', data);
+                }}
+                onCancel={() => {
+                  setRunningExperiment(null);
+                  console.log('Experiment cancelled');
+                }}
+              />
+            )}
+            {(runningExperiment as { id: string }).id === '40hz-audio-1' && (
+              <AuditoryStimulus40Hz
+                config={runningExperiment as { id: string; duration: number }}
+                onComplete={(data) => {
+                  setExperimentResults(prev => [...prev, data as unknown as Record<string, unknown>]);
+                  setRunningExperiment(null);
+                  console.log('40Hz Auditory experiment completed:', data);
+                }}
+                onCancel={() => {
+                  setRunningExperiment(null);
+                  console.log('40Hz Auditory experiment cancelled');
+                }}
+              />
+            )}
+            
+            {/* Questionnaire Components */}
+            {((runningExperiment as { id: string; type?: string }).type === 'questionnaire') && (
+              <QuestionnaireSystem
+                config={runningExperiment as { id: string; type: string }}
+                onComplete={(result) => {
+                  // Convert questionnaire result to ExperimentResult format
+                  const experimentResult: ExperimentResult = {
+                    id: result.questionnaireId + '_' + Date.now(),
+                    experimentType: 'Questionnaire',
+                    experimentName: result.name,
+                    timestamp: result.startTime,
+                    duration: result.endTime - result.startTime,
+                    completed: result.completionStatus === 'completed',
+                    completionStatus: result.completionStatus === 'incomplete' ? 'interrupted' : result.completionStatus as 'completed' | 'interrupted',
+                    annotations: result.responses.map((response, index) => ({
+                      timestamp: response.timestamp,
+                      stimulusType: 'questionnaire_response',
+                      stimulusValue: `Q${index + 1}: ${response.value !== null ? response.value : 'N/A'}`,
+                      response: undefined,
+                      reactionTime: undefined
+                    })),
+                    rawData: {
+                      questionnaireId: result.questionnaireId,
+                      score: result.score,
+                      interpretation: result.interpretation,
+                      responses: result.responses,
+                      validResponses: result.responses.filter(r => r.value !== null).length,
+                      totalQuestions: result.responses.length
+                    }
+                  };
+                  
+                  // Save to database
+                  experimentDB.saveExperiment(experimentResult);
+                  
+                  // Add to results
+                  setExperimentResults(prev => [...prev, result as unknown as Record<string, unknown>]);
+                  setRunningExperiment(null);
+                  console.log('Questionnaire completed and saved:', result);
+                }}
+                onCancel={() => {
+                  setRunningExperiment(null);
+                  console.log('Questionnaire cancelled');
+                }}
+              />
+            )}
+          </>
         )}
       </main>
     </div>
@@ -600,6 +667,8 @@ function ExperimentTabContent({
   const [showExperimentModal, setShowExperimentModal] = useState(false);
   const [selectedExperiment, setSelectedExperiment] = useState<string | null>(null);
   const [experimentDuration, setExperimentDuration] = useState(15);
+  const [showQuestionnaireModal, setShowQuestionnaireModal] = useState(false);
+  const [selectedQuestionnaire, setSelectedQuestionnaire] = useState<string | null>(null);
 
   const content = [
     {
@@ -643,6 +712,32 @@ function ExperimentTabContent({
       description: 'Visual stimulus with periodic and random flickers for P300 response measurement',
       duration: '10-15 minutes',
       type: 'ERP'
+    },
+    {
+      id: '40hz-audio-1',
+      name: '40Hz Sound Stimulation',
+      description: '40Hz auditory stimulus for gamma wave entrainment and brain state modulation',
+      duration: '10-30 seconds',
+      type: 'Auditory'
+    }
+  ];
+
+  const availableQuestionnaires = [
+    {
+      id: 'AD8',
+      name: 'AD8 Dementia Screening Interview',
+      description: 'An informant-based screening tool for early dementia. Consists of 8 yes/no items measuring change in memory, problem-solving, and daily functioning.',
+      duration: '5-10 minutes',
+      type: 'Screening',
+      items: 8
+    },
+    {
+      id: 'IQCODE-16',
+      name: 'Informant Questionnaire on Cognitive Decline in the Elderly (Short Form)',
+      description: 'An informant-based questionnaire assessing cognitive decline over the past 10 years across daily activities and memory functions.',
+      duration: '10-15 minutes',
+      type: 'Assessment',
+      items: 16
     }
   ];
 
@@ -659,6 +754,20 @@ function ExperimentTabContent({
     });
   };
 
+  const handleNewQuestionnaire = () => {
+    setShowQuestionnaireModal(true);
+  };
+
+  const handleQuestionnaireSelection = (questionnaireId: string) => {
+    setSelectedQuestionnaire(questionnaireId);
+    setShowQuestionnaireModal(false);
+    // Start the questionnaire (we'll implement this later)
+    onStartExperiment({
+      id: questionnaireId,
+      type: 'questionnaire'
+    });
+  };
+
   // Handle Results tab (index 5)
   if (tabIndex === 5) {
     return <ResultsTab />;
@@ -666,8 +775,14 @@ function ExperimentTabContent({
 
   return (
     <div className="space-y-8">
-      {/* New Experiment Button */}
-      <div className="flex justify-end mb-4">
+      {/* New Experiment and Questionnaire Buttons */}
+      <div className="flex justify-end mb-4 space-x-4">
+        <button
+          onClick={handleNewQuestionnaire}
+          className="bg-green-500 text-white px-6 py-3 rounded-lg font-medium hover:bg-green-600 transition-colors shadow-md"
+        >
+          📝 New Questionnaire
+        </button>
         <button
           onClick={handleNewExperiment}
           className="bg-[var(--gold)] text-[var(--navy)] px-6 py-3 rounded-lg font-medium hover:bg-yellow-400 transition-colors shadow-md"
@@ -778,6 +893,63 @@ function ExperimentTabContent({
             <div className="mt-6 pt-4 border-t border-gray-200">
               <button
                 onClick={() => setShowExperimentModal(false)}
+                className="w-full bg-gray-300 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-400 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Questionnaire Selection Modal */}
+      {showQuestionnaireModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl p-8 max-w-2xl w-full mx-4 max-h-96 overflow-y-auto">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-2xl font-bold text-[var(--navy)]">Select Questionnaire</h3>
+              <button
+                onClick={() => setShowQuestionnaireModal(false)}
+                className="text-gray-500 hover:text-gray-700 text-2xl font-bold"
+              >
+                ×
+              </button>
+            </div>
+
+            <p className="text-gray-600 mb-6">
+              Choose a screening questionnaire. These validated tools help assess cognitive function and screen for potential issues.
+            </p>
+
+            <div className="space-y-4">
+              {availableQuestionnaires.map((questionnaire) => (
+                <div
+                  key={questionnaire.id}
+                  className="border border-gray-200 rounded-lg p-6 hover:border-green-500 transition-colors cursor-pointer"
+                  onClick={() => handleQuestionnaireSelection(questionnaire.id)}
+                >
+                  <div className="flex justify-between items-start mb-3">
+                    <h4 className="text-xl font-semibold text-[var(--navy)]">{questionnaire.name}</h4>
+                    <span className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm font-medium">
+                      {questionnaire.type}
+                    </span>
+                  </div>
+                  <p className="text-gray-700 mb-3">{questionnaire.description}</p>
+                  <div className="flex justify-between items-center">
+                    <div className="text-sm text-gray-500">
+                      <span className="mr-4">{questionnaire.items} questions</span>
+                      <span>Est. time: {questionnaire.duration}</span>
+                    </div>
+                    <button className="bg-green-500 text-white px-4 py-2 rounded-lg font-medium hover:bg-green-600 transition-colors">
+                      Select
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-6 pt-4 border-t border-gray-200">
+              <button
+                onClick={() => setShowQuestionnaireModal(false)}
                 className="w-full bg-gray-300 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-400 transition-colors"
               >
                 Cancel

@@ -1,0 +1,2771 @@
+'use client'
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+
+// Pyodide types
+declare global {
+  interface Window {
+    loadPyodide: (config?: { indexURL?: string }) => Promise<any>;
+    pyodide: any;
+  }
+}
+
+interface StimulationPeriod {
+  id: string;
+  experiment: string;
+  start_time: number;
+  duration: number;
+  label: string;
+  raw_segment?: any;
+  analysis_results?: Record<string, any>;
+}
+
+interface Experiment {
+  name: string;
+  edf_file?: File;
+  stimulation_periods: StimulationPeriod[];
+  raw_data?: any;
+  file_pair_id?: string; // Links to FilePair
+}
+
+interface FilePair {
+  id: string;
+  edf_file: File;
+  csv_file: File;
+  sync_offset?: number;
+  processed?: boolean;
+  raw_data?: any;
+  session_fragment?: any; // Parsed session data for this pair
+}
+
+interface Session {
+  subject_id: string;
+  date: string;
+  experiments: Experiment[];
+  sync_offset?: number;
+}
+
+interface AnalysisResult {
+  experiment_name: string;
+  stimulation_periods: number;
+  mean_psd?: any;
+  mean_snr?: any;
+  visualization_base64?: string;
+  summary?: Record<string, any>;
+}
+
+interface SSVEPVisualizationResult {
+  plot_base64: string;
+  summary_plot_base64?: string;
+  experiment_name?: string;
+  summary: {
+    total_experiments: number;
+    total_periods: number;
+    avg_snr: number;
+    analysis_duration: string;
+  };
+}
+
+export default function SSVEPAnalysisTool() {
+  const [pyodideReady, setPyodideReady] = useState(false);
+  const [pyodideLoading, setPyodideLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [loadingMessage, setLoadingMessage] = useState<string>('');
+  
+  // File handling states - now supporting multiple files
+  const [edfFiles, setEdfFiles] = useState<File[]>([]);
+  const [csvFiles, setCsvFiles] = useState<File[]>([]);
+  const [filePairs, setFilePairs] = useState<FilePair[]>([]);
+  const [dragActiveEdf, setDragActiveEdf] = useState(false);
+  const [dragActiveCsv, setDragActiveCsv] = useState(false);
+
+  // Legacy single file states for backwards compatibility (will be removed after migration)
+  const [edfFile, setEdfFile] = useState<File | null>(null);
+  const [csvFile, setCsvFile] = useState<File | null>(null);
+  
+  // Session and analysis states
+  const [session, setSession] = useState<Session | null>(null);
+  const [currentStep, setCurrentStep] = useState<'upload' | 'pairing' | 'sync' | 'manual_adjust' | 'analysis' | 'results'>('upload');
+  const [rawEdfData, setRawEdfData] = useState<any>(null);
+  const [syncTimestamp, setSyncTimestamp] = useState<number | null>(null);
+  const [showSyncModal, setShowSyncModal] = useState(false);
+  const [analysisResults, setAnalysisResults] = useState<AnalysisResult[]>([]);
+  const [visualizationResults, setVisualizationResults] = useState<SSVEPVisualizationResult[]>([]);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisProgress, setAnalysisProgress] = useState(0);
+  const [completedSteps, setCompletedSteps] = useState<Set<string>>(new Set());
+  const [selectedPlotTypes, setSelectedPlotTypes] = useState({
+    psd: true,
+    snr: true,
+    snrSpectrum: false,
+    timeSeries: false,
+    topography: false
+  });
+
+  const [selectedSummaryPlots, setSelectedSummaryPlots] = useState({
+    channelSnrHeatmap: true,
+    frequencyResponse: false,
+    channelComparison: false,
+    snrDistribution: false,
+    experimentOverview: false
+  });
+
+  const [psdMethod, setPsdMethod] = useState<'welch' | 'periodogram'>('welch');
+  const [selectedChannels, setSelectedChannels] = useState<string[]>([]);
+
+  // Manual adjustment states
+  const [selectedExperiment, setSelectedExperiment] = useState<string>('');
+  const [periodAdjustments, setPeriodAdjustments] = useState<Record<string, { start: number; duration: number }>>({});
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const csvInputRef = useRef<HTMLInputElement>(null);
+  const chartCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  // Navigation helper functions
+  const canNavigateToStep = useCallback((step: string): boolean => {
+    return completedSteps.has(step) || step === currentStep;
+  }, [completedSteps, currentStep]);
+
+  const canProceedToNextStep = useCallback((nextStep: string): boolean => {
+    switch (nextStep) {
+      case 'pairing':
+        return edfFiles.length > 0 && csvFiles.length > 0;
+      case 'sync':
+        return filePairs.length > 0 && filePairs.every(pair => pair.csv_file && pair.edf_file);
+      case 'manual_adjust':
+        return session !== null;
+      case 'analysis':
+        return session !== null;
+      case 'results':
+        return analysisResults.length > 0;
+      default:
+        return true;
+    }
+  }, [edfFiles, csvFiles, filePairs, session, analysisResults]);
+
+  const markStepCompleted = useCallback((step: string) => {
+    setCompletedSteps(prev => new Set([...prev, step]));
+  }, []);
+
+  // Initialize Pyodide
+  const initializePyodide = useCallback(async () => {
+    if (pyodideReady || pyodideLoading) return;
+
+    try {
+      setPyodideLoading(true);
+      setLoadingMessage('Loading Pyodide WebAssembly runtime...');
+      
+      if (!window.loadPyodide) {
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js';
+        document.head.appendChild(script);
+        
+        await new Promise((resolve) => {
+          script.onload = resolve;
+        });
+      }
+
+      setLoadingMessage('Initializing Python environment...');
+      window.pyodide = await window.loadPyodide({
+        indexURL: "https://cdn.jsdelivr.net/pyodide/v0.26.4/full/"
+      });
+
+      setLoadingMessage('Installing required packages...');
+      await window.pyodide.loadPackage([
+        'numpy',
+        'matplotlib',
+        'pandas',
+        'scipy',
+        'micropip'
+      ]);
+
+      setLoadingMessage('Installing EDF processing libraries...');
+
+      // Try installing pyedflib first
+      let edfLibAvailable = false;
+      try {
+        await window.pyodide.runPythonAsync(`
+import micropip
+await micropip.install('pyedflib')
+print("✅ pyedflib installed successfully")
+        `);
+        edfLibAvailable = true;
+      } catch (err) {
+        console.warn('Could not install pyedflib:', err);
+      }
+
+      // If pyedflib failed, try MNE
+      if (!edfLibAvailable) {
+        try {
+          setLoadingMessage('Installing MNE-Python for EDF reading...');
+          await window.pyodide.runPythonAsync(`
+import micropip
+await micropip.install('mne')
+print("✅ MNE-Python installed successfully")
+          `);
+          edfLibAvailable = true;
+        } catch (err) {
+          console.warn('Could not install MNE:', err);
+        }
+      }
+
+      if (!edfLibAvailable) {
+        await window.pyodide.runPython(`
+print("⚠️  Both pyedflib and MNE installation failed - will use simulation mode")
+        `);
+      }
+
+      setLoadingMessage('Loading SSVEP analysis libraries...');
+      
+      // Test basic Python functionality
+      const testResult = await window.pyodide.runPython(`
+import sys
+print("Python is working!")
+print(f"Python version: {sys.version}")
+"test_success"
+      `);
+      console.log('Python test result:', testResult);
+
+      // Load the SSVEP analysis Python code from file
+      const pythonResponse = await fetch('/ssvep_analysis.py');
+      if (!pythonResponse.ok) {
+        throw new Error(`Failed to load ssvep_analysis.py: ${pythonResponse.statusText}`);
+      }
+      const pythonCode = await pythonResponse.text();
+      
+      await window.pyodide.runPython(pythonCode);
+      
+      console.log('Python SSVEP analysis code loaded successfully');
+
+      setPyodideReady(true);
+      setLoadingMessage('');
+      setSuccess('SSVEP Analysis Tool ready!');
+      
+      setTimeout(() => setSuccess(null), 3000);
+
+    } catch (err) {
+      console.error('Error initializing Pyodide:', err);
+      setError(`Failed to initialize Python environment: ${err}`);
+      setPyodideLoading(false);
+    } finally {
+      setPyodideLoading(false);
+    }
+  }, [pyodideReady, pyodideLoading]);
+
+  useEffect(() => {
+    initializePyodide();
+  }, [initializePyodide]);
+
+  // File upload handlers - updated for multiple files
+  const handleEdfFilesSelect = useCallback((files: FileList | File[]) => {
+    const fileArray = Array.from(files);
+    const validFiles: File[] = [];
+
+    fileArray.forEach(file => {
+      if (file.name.toLowerCase().endsWith('.edf')) {
+        validFiles.push(file);
+      } else {
+        setError(`Invalid file: ${file.name}. Please select EDF files only.`);
+      }
+    });
+
+    if (validFiles.length > 0) {
+      setEdfFiles(prev => [...prev, ...validFiles]);
+      setError(null);
+    }
+  }, []);
+
+  const handleCsvFilesSelect = useCallback((files: FileList | File[]) => {
+    const fileArray = Array.from(files);
+    const validFiles: File[] = [];
+
+    fileArray.forEach(file => {
+      if (file.name.toLowerCase().endsWith('.csv')) {
+        validFiles.push(file);
+      } else {
+        setError(`Invalid file: ${file.name}. Please select CSV files only.`);
+      }
+    });
+
+    if (validFiles.length > 0) {
+      setCsvFiles(prev => [...prev, ...validFiles]);
+      setError(null);
+    }
+  }, []);
+
+  // Legacy single file handlers for backwards compatibility
+  const handleEdfFileSelect = useCallback((file: File) => {
+    handleEdfFilesSelect([file]);
+  }, [handleEdfFilesSelect]);
+
+  const handleCsvFileSelect = useCallback((file: File) => {
+    handleCsvFilesSelect([file]);
+  }, [handleCsvFilesSelect]);
+
+  // File management functions
+  const removeEdfFile = useCallback((fileName: string) => {
+    setEdfFiles(prev => prev.filter(file => file.name !== fileName));
+  }, []);
+
+  const removeCsvFile = useCallback((fileName: string) => {
+    setCsvFiles(prev => prev.filter(file => file.name !== fileName));
+  }, []);
+
+  const createFilePair = useCallback((edfFile: File, csvFile: File) => {
+    const newPair: FilePair = {
+      id: `${edfFile.name}_${csvFile.name}_${Date.now()}`,
+      edf_file: edfFile,
+      csv_file: csvFile,
+      processed: false
+    };
+    setFilePairs(prev => [...prev, newPair]);
+    return newPair;
+  }, []);
+
+  const removeFilePair = useCallback((pairId: string) => {
+    setFilePairs(prev => prev.filter(pair => pair.id !== pairId));
+  }, []);
+
+  const updateFilePair = useCallback((pairId: string, updates: Partial<FilePair>) => {
+    setFilePairs(prev => prev.map(pair =>
+      pair.id === pairId ? { ...pair, ...updates } : pair
+    ));
+  }, []);
+
+  // Multi-file processing functions
+  const processFilePair = useCallback(async (pairId: string) => {
+    if (!pyodideReady) return;
+
+    const pair = filePairs.find(p => p.id === pairId);
+    if (!pair) return;
+
+    try {
+      setLoadingMessage(`Processing pair: ${pair.edf_file.name} + ${pair.csv_file.name}...`);
+
+      // Get sync offset from input
+      const syncInput = document.getElementById(`sync-${pairId}`) as HTMLInputElement;
+      const syncOffset = parseFloat(syncInput?.value || '0');
+
+      // Read CSV file
+      const csvText = await pair.csv_file.text();
+
+      // Read EDF file as array buffer
+      const edfArrayBuffer = await pair.edf_file.arrayBuffer();
+      const edfUint8Array = new Uint8Array(edfArrayBuffer);
+
+      // Set data in Python
+      window.pyodide.globals.set('csv_content_js', csvText);
+      window.pyodide.globals.set('edf_data_js', edfUint8Array);
+      window.pyodide.globals.set('edf_filename_js', pair.edf_file.name);
+      window.pyodide.globals.set('sync_offset_js', syncOffset);
+
+      // Process the pair in Python
+      const result = await window.pyodide.runPython(`
+import json
+from datetime import datetime
+
+result = None
+try:
+    # Create session from CSV
+    session_fragment = create_session_from_csv(
+        csv_content_js,
+        subject_id=edf_filename_js,
+        date=datetime.now().strftime("%Y-%m-%d")
+    )
+
+    # Apply sync offset
+    if sync_offset_js != 0:
+        session_fragment = apply_sync_offset(session_fragment, sync_offset_js)
+
+    # Read EDF data
+    raw_data = read_edf_file_data(edf_data_js, edf_filename_js)
+
+    # Convert session to JSON-serializable format
+    session_dict = {
+        'subject_id': session_fragment.subject_id,
+        'date': session_fragment.date,
+        'experiments': []
+    }
+
+    for exp in session_fragment.experiments:
+        exp_dict = {
+            'name': exp.name,
+            'stimulation_periods': [],
+            'file_pair_id': '${pairId}'
+        }
+
+        for stim in exp.stimulation_periods:
+            stim_dict = {
+                'id': f"{exp.name}_{stim.label}_{len(exp_dict['stimulation_periods'])}",
+                'experiment': exp.name,
+                'start_time': stim.start,
+                'duration': stim.duration,
+                'label': stim.label or f'Period_{len(exp_dict["stimulation_periods"])+1}'
+            }
+            exp_dict['stimulation_periods'].append(stim_dict)
+
+        session_dict['experiments'].append(exp_dict)
+
+    result = {
+        'session_fragment': session_dict,
+        'raw_data': {
+            'fs': raw_data['fs'],
+            'channel_names': raw_data['channel_names'],
+            'duration_seconds': raw_data.get('duration_seconds', len(raw_data['data'][0]) / raw_data['fs']),
+            'n_channels': len(raw_data['channel_names'])
+        },
+        'sync_offset': sync_offset_js
+    }
+
+except Exception as e:
+    result = {'error': str(e)}
+
+json.dumps(result)
+      `);
+
+      const parsedResult = JSON.parse(result);
+
+      if (parsedResult.error) {
+        throw new Error(parsedResult.error);
+      }
+
+      // Update the file pair
+      updateFilePair(pairId, {
+        processed: true,
+        sync_offset: syncOffset,
+        session_fragment: parsedResult.session_fragment,
+        raw_data: parsedResult.raw_data
+      });
+
+      setLoadingMessage('');
+      setSuccess(`Successfully processed pair: ${pair.edf_file.name} + ${pair.csv_file.name}`);
+      setTimeout(() => setSuccess(null), 3000);
+
+    } catch (error) {
+      console.error('Error processing file pair:', error);
+      setError(`Error processing pair: ${error}`);
+      setLoadingMessage('');
+    }
+  }, [filePairs, pyodideReady, updateFilePair]);
+
+  const processAllPairs = useCallback(async () => {
+    const unprocessedPairs = filePairs.filter(pair => !pair.processed);
+
+    for (const pair of unprocessedPairs) {
+      await processFilePair(pair.id);
+      // Small delay between processing pairs
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  }, [filePairs, processFilePair]);
+
+  const mergeIntoSession = useCallback(async () => {
+    if (!pyodideReady || !filePairs.every(pair => pair.processed)) return;
+
+    try {
+      setLoadingMessage('Merging file pairs into single session...');
+
+      // Merge all session fragments into one
+      const mergedSession: Session = {
+        subject_id: `Multi-file_${new Date().toISOString().split('T')[0]}`,
+        date: new Date().toISOString().split('T')[0],
+        experiments: []
+      };
+
+      // Collect all experiments from all pairs
+      filePairs.forEach(pair => {
+        if (pair.session_fragment?.experiments) {
+          pair.session_fragment.experiments.forEach((exp: any) => {
+            mergedSession.experiments.push({
+              ...exp,
+              file_pair_id: pair.id
+            });
+          });
+        }
+      });
+
+      // Set merged raw data (combine all raw data)
+      const combinedRawData = {
+        fs: filePairs[0]?.raw_data?.fs || 256,
+        channel_names: filePairs[0]?.raw_data?.channel_names || [],
+        duration_seconds: filePairs.reduce((total, pair) =>
+          total + (pair.raw_data?.duration_seconds || 0), 0),
+        file_pairs: filePairs.map(pair => ({
+          id: pair.id,
+          edf_file: pair.edf_file.name,
+          csv_file: pair.csv_file.name,
+          raw_data: pair.raw_data
+        }))
+      };
+
+      setSession(mergedSession);
+      setRawEdfData(combinedRawData);
+
+      markStepCompleted('sync');
+      setLoadingMessage('');
+      setSuccess(`Successfully merged ${filePairs.length} file pairs into session!`);
+      setTimeout(() => setSuccess(null), 3000);
+
+    } catch (error) {
+      console.error('Error merging session:', error);
+      setError(`Error merging session: ${error}`);
+      setLoadingMessage('');
+    }
+  }, [filePairs, pyodideReady, markStepCompleted]);
+
+  // Process uploaded files (legacy - keep for backwards compatibility)
+  const processFiles = useCallback(async () => {
+    if (!edfFile || !csvFile || !pyodideReady) {
+      setError('Please upload both EDF and CSV files');
+      return;
+    }
+
+    try {
+      setLoadingMessage('Processing CSV annotations...');
+      
+      // Read CSV file
+      const csvContent = await csvFile.text();
+      console.log('CSV Content:', csvContent);
+      
+      if (!csvContent.trim()) {
+        throw new Error('CSV file is empty');
+      }
+      
+      // Store CSV content in Pyodide
+      window.pyodide.globals.set('csv_content_js', csvContent);
+      window.pyodide.globals.set('edf_filename_js', edfFile.name.replace('.edf', ''));
+      
+      // First, test if we can get basic results from Python
+      const basicTest = await window.pyodide.runPython(`
+import json
+test_result = {"test": "success", "csv_length": len(csv_content_js)}
+json.dumps(test_result)
+      `);
+      
+      console.log('Basic Python test:', basicTest);
+      
+      if (!basicTest) {
+        throw new Error('Python execution is not working - basic test failed');
+      }
+      
+      // Create session using proper functions
+      const sessionResult = await window.pyodide.runPython(`
+import json
+from datetime import datetime
+
+result = None
+
+try:
+    # Use the proper session creation function
+    session = create_session_from_csv(csv_content_js, subject_id=edf_filename_js, date=datetime.now().strftime("%Y-%m-%d"))
+    
+    # Store session globally for analysis
+    current_session = session
+    
+    # Convert to JSON-serializable format
+    session_dict = {
+        'subject_id': session.subject_id,
+        'date': session.date,
+        'experiments': []
+    }
+    
+    for exp in session.experiments:
+        exp_dict = {
+            'name': exp.name,
+            'stimulation_periods': []
+        }
+        
+        for stim in exp.stimulation_periods:
+            stim_dict = {
+                'start_time': stim.start,
+                'duration': stim.duration,
+                'label': stim.label or ''
+            }
+            exp_dict['stimulation_periods'].append(stim_dict)
+        
+        session_dict['experiments'].append(exp_dict)
+    
+    result = json.dumps(session_dict)
+    
+except Exception as e:
+    import traceback
+    error_info = {
+        'error': str(e),
+        'traceback': traceback.format_exc()
+    }
+    result = json.dumps(error_info)
+
+result
+      `);
+
+      console.log('Session Result from Python:', sessionResult, typeof sessionResult);
+      
+      if (!sessionResult || sessionResult === 'undefined') {
+        throw new Error('Failed to process CSV file - no result returned from Python');
+      }
+      
+      const sessionData = JSON.parse(sessionResult);
+      
+      if (sessionData.error) {
+        throw new Error(sessionData.error);
+      }
+
+      setSession(sessionData as Session);
+      markStepCompleted('upload');
+      
+      // Load actual EDF data
+      setLoadingMessage('Processing EDF file...');
+
+      // Read EDF file as ArrayBuffer (proper way for Pyodide)
+      const edfArrayBuffer = await edfFile.arrayBuffer();
+      const edfBytes = new Uint8Array(edfArrayBuffer);
+
+      // Store EDF file data in Pyodide using proper method
+      window.pyodide.globals.set('js_uint8_array', edfBytes);
+      window.pyodide.globals.set('filename', edfFile.name);
+
+      const rawDataResult = await window.pyodide.runPython(`
+# Calculate required EDF duration from CSV data
+max_end_time = 0
+if current_session:
+    for exp in current_session.experiments:
+        for stim in exp.stimulation_periods:
+            end_time = stim.start + stim.duration
+            if end_time > max_end_time:
+                max_end_time = end_time
+
+# Add buffer time (30 seconds) and ensure minimum duration
+required_duration = max(max_end_time + 30, 300)
+
+print(f"📁 PROCESSING EDF FILE:")
+print(f"   File size: {len(js_uint8_array)} bytes ({len(js_uint8_array)/(1024*1024):.2f} MB)")
+print(f"   Required duration from CSV: {max_end_time:.1f}s, using: {required_duration:.1f}s")
+
+# Load EDF data using the correct function signature
+raw_data = read_edf_file_data(js_uint8_array, filename)
+current_raw_data = raw_data
+
+# Return basic info
+data_info = {
+    'n_channels': len(raw_data['channel_names']),
+    'duration_seconds': len(raw_data['times']) / raw_data['fs'],
+    'fs': raw_data['fs'],
+    'channel_names': raw_data['channel_names']
+}
+
+import json
+json.dumps(data_info)
+      `);
+
+      const rawDataInfo = JSON.parse(rawDataResult);
+      setRawEdfData(rawDataInfo);
+
+      // Initialize all channels as selected by default
+      if (rawDataInfo.channel_names && rawDataInfo.channel_names.length > 0) {
+        setSelectedChannels(rawDataInfo.channel_names);
+      }
+
+      setCurrentStep('sync');
+      setLoadingMessage('');
+      setSuccess('Files loaded successfully! Please synchronize the data.');
+      
+      setTimeout(() => setSuccess(null), 3000);
+      
+    } catch (err) {
+      console.error('Error processing files:', err);
+      setError(`Error processing files: ${err}`);
+      setLoadingMessage('');
+    }
+  }, [edfFile, csvFile, pyodideReady]);
+
+  // Synchronization
+  const applySynchronization = useCallback(async (offset: number) => {
+    if (!session || !pyodideReady) return;
+
+    try {
+      setLoadingMessage('Applying synchronization offset...');
+      
+      // Store offset in Pyodide
+      window.pyodide.globals.set('sync_offset_js', offset);
+      
+      await window.pyodide.runPython(`
+# Apply sync offset
+if current_session:
+    current_session = apply_sync_offset(current_session, sync_offset_js)
+      `);
+
+      // Update local session state
+      const updatedSession = { ...session };
+      updatedSession.experiments.forEach(exp => {
+        exp.stimulation_periods.forEach(period => {
+          period.start_time += offset;
+        });
+      });
+      updatedSession.sync_offset = offset;
+      
+      setSession(updatedSession);
+      setSyncTimestamp(null);
+      setShowSyncModal(false);
+      markStepCompleted('sync');
+      setCurrentStep('manual_adjust');
+      setLoadingMessage('');
+      setSuccess('Synchronization applied successfully!');
+      
+      setTimeout(() => setSuccess(null), 3000);
+      
+    } catch (err) {
+      console.error('Error applying synchronization:', err);
+      setError(`Error applying synchronization: ${err}`);
+      setLoadingMessage('');
+    }
+  }, [session, pyodideReady]);
+
+  // Analysis
+  const runAnalysis = useCallback(async () => {
+    if (!session || !pyodideReady) return;
+
+    try {
+      // Clear previous results before starting new analysis
+      setAnalysisResults([]);
+      setVisualizationResults([]);
+
+      // Force state update and UI refresh
+      setIsAnalyzing(true);
+      setAnalysisProgress(0);
+      setLoadingMessage('Initializing analysis...');
+
+      console.log('🚀 Starting analysis - Loading overlay should be visible');
+      console.log('🧹 Cleared previous analysis and visualization results');
+
+      // Small delay to ensure state update and UI render
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      setLoadingMessage('Reading analysis settings...');
+
+      // Clear Python global variables from previous analysis
+      await window.pyodide.runPython(`
+# Clear any existing analysis results
+if 'current_analysis_results' in globals():
+    current_analysis_results = []
+    print("   🧹 Cleared Python analysis results")
+`);
+
+      // Scrape current page settings to ensure we use the latest selections
+      const currentPsdMethod = document.querySelector('input[name="psdMethod"]:checked')?.getAttribute('value') || 'welch';
+
+      // Get plot type selections from checkboxes
+      const currentPlotTypes = {
+        psd: (document.querySelector('input[type="checkbox"][data-plot="psd"]') as HTMLInputElement)?.checked || false,
+        snr: (document.querySelector('input[type="checkbox"][data-plot="snr"]') as HTMLInputElement)?.checked || false,
+        snrSpectrum: (document.querySelector('input[type="checkbox"][data-plot="snrSpectrum"]') as HTMLInputElement)?.checked || false,
+        timeSeries: (document.querySelector('input[type="checkbox"][data-plot="timeSeries"]') as HTMLInputElement)?.checked || false,
+        topography: (document.querySelector('input[type="checkbox"][data-plot="topography"]') as HTMLInputElement)?.checked || false
+      };
+
+      // Get summary plot selections from state
+      const currentSummaryPlots = selectedSummaryPlots;
+
+      // Get selected channels from checkboxes
+      const channelCheckboxes = document.querySelectorAll('input[type="checkbox"][data-channel]');
+      const currentSelectedChannels: string[] = [];
+      channelCheckboxes.forEach(checkbox => {
+        if ((checkbox as HTMLInputElement).checked) {
+          currentSelectedChannels.push((checkbox as HTMLInputElement).getAttribute('data-channel') || '');
+        }
+      });
+
+      // Safety check for selected channels
+      if (currentSelectedChannels.length === 0) {
+        setIsAnalyzing(false);
+        setShowAnalysisOverlay(false);
+        console.error('❌ No channels selected for analysis');
+        alert('Please select at least one channel for analysis.');
+        return;
+      }
+
+      // Update state with scraped values
+      setPsdMethod(currentPsdMethod as 'welch' | 'periodogram');
+      setSelectedPlotTypes(currentPlotTypes);
+      setSelectedChannels(currentSelectedChannels);
+
+      console.log('🔍 Scraped Analysis Settings:');
+      console.log('  PSD Method:', currentPsdMethod);
+      console.log('  Plot Types:', Object.entries(currentPlotTypes).filter(([_, selected]) => selected).map(([type, _]) => type));
+      console.log('  Summary Plots:', Object.entries(currentSummaryPlots).filter(([_, selected]) => selected).map(([type, _]) => type));
+      console.log('  Selected Channels:', currentSelectedChannels);
+
+      setLoadingMessage('Extracting stimulation periods...');
+      setAnalysisProgress(10);
+      
+      // Extract stimulation periods - handle both single and multi-file cases
+      setAnalysisProgress(20);
+      await window.pyodide.runPython(`
+if current_session and current_raw_data:
+    # Check if this is multi-file data
+    if 'file_pairs' in current_raw_data:
+        print("🔀 Detected multi-file session, using multi-file extraction")
+        current_session = extract_stimulation_periods_multi_file(current_raw_data, current_session)
+    else:
+        print("📄 Detected single-file session, using standard extraction")
+        current_session = extract_stimulation_periods(current_raw_data, current_session)
+      `);
+
+      setLoadingMessage('Analyzing experiments...');
+      setAnalysisProgress(50);
+
+      // Set PSD method, target frequency, and selected channels using scraped values
+      window.pyodide.globals.set('psd_method_js', currentPsdMethod);
+      window.pyodide.globals.set('selected_channels_js', currentSelectedChannels);
+
+      console.log(`Using PSD method: ${currentPsdMethod}`);
+      console.log(`Selected channels: ${currentSelectedChannels.join(', ')}`);
+
+      // Get number of experiments for progress tracking
+      const numExperiments = session.experiments.length;
+      console.log(`📊 Starting analysis of ${numExperiments} experiments`);
+
+      // Run analysis for each experiment with progress tracking
+      for (let i = 0; i < numExperiments; i++) {
+        const exp = session.experiments[i];
+        setLoadingMessage(`Analyzing experiment ${i + 1}/${numExperiments}: ${exp.name}`);
+        setAnalysisProgress(50 + Math.round((i / numExperiments) * 25)); // 50-75% range
+
+        await window.pyodide.runPython(`
+# Ensure current_analysis_results exists and is a list
+if 'current_analysis_results' not in globals() or current_analysis_results is None:
+    current_analysis_results = []
+    print("   🔧 Initialized current_analysis_results")
+
+# Analyze single experiment
+if current_session and len(current_session.experiments) > ${i}:
+    exp = current_session.experiments[${i}]
+    print(f"   Analyzing experiment ${i + 1}/${numExperiments}: {exp.name}")
+    print(f"   Debug: current_analysis_results type = {type(current_analysis_results)}")
+
+    # Safety check before calling analyze_experiment
+    if psd_method_js is None:
+        print("   Warning: psd_method_js is None, using 'welch'")
+        psd_method_js = 'welch'
+    if selected_channels_js is None:
+        print("   Warning: selected_channels_js is None, using empty list")
+        selected_channels_js = []
+
+    # Check if this is multi-file data and use appropriate analysis function
+    if 'file_pairs' in current_raw_data:
+        print("   🔀 Using multi-file analysis function")
+        # Create file pair data mapping
+        file_pair_data = {}
+        for file_pair in current_raw_data['file_pairs']:
+            file_pair_data[file_pair['id']] = file_pair
+
+        result = analyze_experiment_multi_file(exp, file_pair_data, target_frequencies=[40], psd_method=psd_method_js, selected_channels=selected_channels_js)
+    else:
+        print("   📄 Using single-file analysis function")
+        result = analyze_experiment(exp, fs=current_raw_data['fs'], target_frequencies=[40], psd_method=psd_method_js, selected_channels=selected_channels_js)
+
+    if result:
+        try:
+            current_analysis_results.append(result)
+            print(f"     ✅ Analysis completed for {exp.name}")
+        except Exception as e:
+            print(f"     ❌ Error appending result: {e}")
+            print(f"     Debug: current_analysis_results = {current_analysis_results}")
+            print(f"     Debug: result = {type(result)}")
+    else:
+        print(f"     ❌ Analysis failed for {exp.name}")
+else:
+    print(f"   ❌ Invalid experiment index ${i} or missing session")
+        `);
+
+        // Small delay to ensure UI updates
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+
+      // Initialize results if needed
+      const analysisResult = await window.pyodide.runPython(`
+# Ensure results are available
+if 'current_analysis_results' not in globals():
+    current_analysis_results = []
+
+print(f"🔬 ANALYSIS SUMMARY:")
+print(f"   PSD Method: {psd_method_js}")
+print(f"   Target Frequencies: [40] Hz")
+print(f"   Selected Channels: {selected_channels_js}")
+print(f"   Total results: {len(current_analysis_results)}")
+
+import json
+json.dumps({
+    'total': len(current_analysis_results),
+    'experiments': [r['experiment_name'] for r in current_analysis_results] if current_analysis_results else []
+})
+      `);
+
+      const analysisInfo = JSON.parse(analysisResult);
+      console.log(`✅ Completed analysis of ${analysisInfo.total} experiments`);
+
+      setLoadingMessage('Preparing visualizations...');
+      setAnalysisProgress(80);
+
+      // Convert plot types to a simple object for Python
+      const plotTypesForPython = {
+        psd: currentPlotTypes.psd,
+        snr: currentPlotTypes.snr,
+        snrSpectrum: currentPlotTypes.snrSpectrum,
+        timeSeries: currentPlotTypes.timeSeries,
+        topography: currentPlotTypes.topography
+      };
+
+      const selectedPlotCount = Object.values(plotTypesForPython).filter(Boolean).length;
+      console.log(`📊 Creating ${selectedPlotCount} plot types for ${analysisInfo.total} experiments`);
+
+      // Set plot type selections for visualization
+      window.pyodide.globals.set('plot_types_psd', plotTypesForPython.psd);
+      window.pyodide.globals.set('plot_types_snr', plotTypesForPython.snr);
+      window.pyodide.globals.set('plot_types_snrSpectrum', plotTypesForPython.snrSpectrum);
+      window.pyodide.globals.set('plot_types_timeSeries', plotTypesForPython.timeSeries);
+      window.pyodide.globals.set('plot_types_topography', plotTypesForPython.topography);
+
+      // Set summary plot selections for visualization
+      window.pyodide.globals.set('summary_plots_channelSnrHeatmap', currentSummaryPlots.channelSnrHeatmap);
+      window.pyodide.globals.set('summary_plots_frequencyResponse', currentSummaryPlots.frequencyResponse);
+      window.pyodide.globals.set('summary_plots_channelComparison', currentSummaryPlots.channelComparison);
+      window.pyodide.globals.set('summary_plots_snrDistribution', currentSummaryPlots.snrDistribution);
+      window.pyodide.globals.set('summary_plots_experimentOverview', currentSummaryPlots.experimentOverview);
+
+      setLoadingMessage('Generating plots...');
+      setAnalysisProgress(85);
+
+      // Create visualizations
+      const vizResult = await window.pyodide.runPython(`
+result = None
+if current_analysis_results:
+    # Create plot types dict from individual variables
+    plot_types = {
+        'psd': plot_types_psd,
+        'snr': plot_types_snr,
+        'snrSpectrum': plot_types_snrSpectrum,
+        'timeSeries': plot_types_timeSeries,
+        'topography': plot_types_topography
+    }
+
+    # Create summary plot types dict from individual variables
+    summary_plots = {
+        'channelSnrHeatmap': summary_plots_channelSnrHeatmap,
+        'frequencyResponse': summary_plots_frequencyResponse,
+        'channelComparison': summary_plots_channelComparison,
+        'snrDistribution': summary_plots_snrDistribution,
+        'experimentOverview': summary_plots_experimentOverview
+    }
+
+    print(f"📊 CREATING VISUALIZATIONS:")
+    print(f"   Selected plot types: {[k for k, v in plot_types.items() if v]}")
+    print(f"   Selected summary plots: {[k for k, v in summary_plots.items() if v]}")
+
+    viz_result = create_ssvep_visualization(current_analysis_results, plot_types, summary_plots)
+    if viz_result:
+        result = viz_result
+
+import json
+json.dumps(result)
+      `);
+
+      setLoadingMessage('Finalizing visualizations...');
+      setAnalysisProgress(95);
+
+      const visualization = JSON.parse(vizResult);
+      console.log('📊 Visualization result:', visualization);
+
+      if (visualization && visualization.plot_base64) {
+        setVisualizationResults([visualization as SSVEPVisualizationResult]);
+        console.log(`✅ Generated visualization with ${selectedPlotCount} plot types`);
+        console.log('📊 Plot base64 length:', visualization.plot_base64.length);
+      } else {
+        console.warn('⚠️ No visualization generated or missing plot_base64');
+        console.warn('📊 Visualization object:', visualization);
+      }
+
+      setLoadingMessage('Analysis complete!');
+      setAnalysisProgress(100);
+
+      // Small delay to show completion before hiding overlay
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      markStepCompleted('analysis');
+      setCurrentStep('results');
+      setLoadingMessage('');
+      setSuccess('Analysis completed successfully!');
+      
+      setTimeout(() => setSuccess(null), 3000);
+      
+    } catch (err) {
+      console.error('Error running analysis:', err);
+      setError(`Error running analysis: ${err}`);
+    } finally {
+      setIsAnalyzing(false);
+      setLoadingMessage('');
+      setAnalysisProgress(0);
+    }
+  }, [session, pyodideReady, psdMethod]);
+
+  // Export functions
+  const exportCSV = useCallback(() => {
+    if (!analysisResults.length) return;
+    
+    // Create CSV content
+    const headers = ['Experiment', 'Periods', 'SNR_40Hz'];
+    const rows = analysisResults.map(result => [
+      result.experiment_name,
+      result.stimulation_periods,
+      result.summary?.mean_snr_40hz?.toFixed(2) || 'N/A'
+    ]);
+    
+    const csvContent = [headers, ...rows].map(row => row.join(',')).join('\n');
+    
+    // Download CSV file
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `ssvep_analysis_${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [analysisResults]);
+
+  const downloadPlots = useCallback(() => {
+    if (!visualizationResults.length) return;
+
+    visualizationResults.forEach((viz, idx) => {
+      // Download experiment plots
+      if (viz.plot_base64) {
+        const byteCharacters = atob(viz.plot_base64);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: 'image/png' });
+
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `ssvep_experiment_plots_${idx + 1}_${new Date().toISOString().split('T')[0]}.png`;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+
+      // Download summary plots if available
+      if (viz.summary_plot_base64) {
+        const byteCharacters = atob(viz.summary_plot_base64);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: 'image/png' });
+
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `ssvep_summary_plots_${idx + 1}_${new Date().toISOString().split('T')[0]}.png`;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    });
+  }, [visualizationResults]);
+
+  const generateReport = useCallback(async () => {
+    if (!analysisResults.length || !session || !pyodideReady) return;
+
+    try {
+      setLoadingMessage('Generating PDF report...');
+
+      // Install reportlab for PDF generation
+      await window.pyodide.loadPackage('micropip');
+
+      // Install reportlab using runPythonAsync for async operations
+      await window.pyodide.runPythonAsync(`
+import micropip
+await micropip.install('reportlab')
+      `);
+
+      // Prepare data for PDF generation
+      const reportData = {
+        subject_id: session.subject_id,
+        date: session.date,
+        generated_date: new Date().toLocaleString(),
+        experiments: analysisResults.map(result => ({
+          name: result.experiment_name,
+          periods: result.stimulation_periods,
+          snr_40hz: result.summary?.mean_snr_40hz?.toFixed(2) || 'N/A'
+        })),
+        total_experiments: analysisResults.length,
+        total_periods: analysisResults.reduce((sum, r) => sum + r.stimulation_periods, 0),
+        n_channels: rawEdfData?.n_channels || 8,
+        channel_names: rawEdfData?.channel_names || [],
+        duration_seconds: rawEdfData?.duration_seconds || 0,
+        fs: rawEdfData?.fs || 256
+      };
+
+      window.pyodide.globals.set('report_data_js', JSON.stringify(reportData));
+
+      // Pass visualization data for inclusion in PDF
+      const plotsData = visualizationResults.map(viz => viz.plot_base64);
+      window.pyodide.globals.set('plots_base64_js', JSON.stringify(plotsData));
+
+      const pdfResult = await window.pyodide.runPython(`
+import json
+from reportlab.lib.pagesizes import letter, A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
+import io
+import base64
+
+# Parse report data
+report_data = json.loads(report_data_js)
+plots_base64 = json.loads(plots_base64_js) if 'plots_base64_js' in globals() else []
+
+print(f"📄 GENERATING PDF REPORT:")
+print(f"   Subject: {report_data['subject_id']}")
+print(f"   Experiments: {report_data['total_experiments']}")
+print(f"   Total periods: {report_data['total_periods']}")
+print(f"   Channels: {report_data['n_channels']}")
+print(f"   Plots to include: {len(plots_base64)}")
+
+# Create PDF in memory
+buffer = io.BytesIO()
+doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=18)
+
+# Container for the 'Flowable' objects
+story = []
+
+# Define styles
+styles = getSampleStyleSheet()
+title_style = ParagraphStyle(
+    'CustomTitle',
+    parent=styles['Heading1'],
+    fontSize=24,
+    spaceAfter=30,
+    alignment=TA_CENTER,
+    textColor=colors.darkblue
+)
+
+# Title
+story.append(Paragraph("SSVEP Analysis Report", title_style))
+story.append(Spacer(1, 12))
+
+# Header information
+header_data = [
+    ['Subject ID:', report_data['subject_id']],
+    ['Analysis Date:', report_data['date']],
+    ['Report Generated:', report_data['generated_date']],
+    ['Duration:', f"{report_data['duration_seconds']:.1f} seconds"],
+    ['Sampling Frequency:', f"{report_data['fs']} Hz"],
+    ['Channels:', f"{report_data['n_channels']} ({', '.join(report_data['channel_names'][:8])})"]
+]
+
+header_table = Table(header_data, colWidths=[2*inch, 4*inch])
+header_table.setStyle(TableStyle([
+    ('BACKGROUND', (0, 0), (0, -1), colors.lightgrey),
+    ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+    ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+    ('FONTSIZE', (0, 0), (-1, -1), 10),
+    ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+    ('GRID', (0, 0), (-1, -1), 1, colors.black)
+]))
+
+story.append(header_table)
+story.append(Spacer(1, 20))
+
+# Summary section
+story.append(Paragraph("Analysis Summary", styles['Heading2']))
+summary_data = [
+    ['Metric', 'Value'],
+    ['Experiments Analyzed', str(report_data['total_experiments'])],
+    ['Total Stimulation Periods', str(report_data['total_periods'])],
+    ['EEG Channels', str(report_data['n_channels'])],
+    ['Average SNR (40 Hz)', f"{sum(float(exp['snr_40hz']) for exp in report_data['experiments'] if exp['snr_40hz'] != 'N/A') / len([exp for exp in report_data['experiments'] if exp['snr_40hz'] != 'N/A']):.2f} dB" if any(exp['snr_40hz'] != 'N/A' for exp in report_data['experiments']) else 'N/A']
+]
+
+summary_table = Table(summary_data, colWidths=[3*inch, 2*inch])
+summary_table.setStyle(TableStyle([
+    ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+    ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+    ('FONTSIZE', (0, 0), (-1, -1), 10),
+    ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+    ('GRID', (0, 0), (-1, -1), 1, colors.black)
+]))
+
+story.append(summary_table)
+story.append(Spacer(1, 20))
+
+# Detailed results
+story.append(Paragraph("Detailed Results", styles['Heading2']))
+
+# Experiment results table
+exp_data = [['Experiment', 'Periods', '40 Hz SNR (dB)']]
+for exp in report_data['experiments']:
+    exp_data.append([exp['name'], str(exp['periods']), exp['snr_40hz']])
+
+exp_table = Table(exp_data, colWidths=[3*inch, 1.5*inch, 1.5*inch])
+exp_table.setStyle(TableStyle([
+    ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+    ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+    ('FONTSIZE', (0, 0), (-1, -1), 10),
+    ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+    ('GRID', (0, 0), (-1, -1), 1, colors.black)
+]))
+
+story.append(exp_table)
+story.append(Spacer(1, 20))
+
+# Add visualizations if available
+if plots_base64:
+    story.append(PageBreak())
+    story.append(Paragraph("SSVEP Analysis Visualizations", styles['Heading2']))
+    story.append(Spacer(1, 12))
+
+    from reportlab.platypus import Image
+
+    for i, plot_base64 in enumerate(plots_base64):
+        try:
+            # Decode base64 plot
+            plot_data = base64.b64decode(plot_base64)
+            plot_buffer = io.BytesIO(plot_data)
+
+            # Add plot title
+            story.append(Paragraph(f"Visualization {i+1}: SSVEP Analysis Results", styles['Heading3']))
+            story.append(Spacer(1, 12))
+
+            # Create image from plot data
+            # Scale image to fit page width (about 6 inches)
+            img = Image(plot_buffer, width=6*inch, height=4*inch)
+            story.append(img)
+            story.append(Spacer(1, 20))
+
+            print(f"   Added plot {i+1} to PDF")
+
+        except Exception as e:
+            print(f"   Warning: Could not add plot {i+1} to PDF: {e}")
+            story.append(Paragraph(f"Plot {i+1}: Could not be included in PDF", styles['Normal']))
+            story.append(Spacer(1, 12))
+
+# Footer
+story.append(Spacer(1, 20))
+story.append(Paragraph("Generated by SSVEP Analysis Tool", styles['Normal']))
+
+# Build PDF
+doc.build(story)
+
+# Get PDF data
+pdf_data = buffer.getvalue()
+buffer.close()
+
+# Convert to base64 for download
+pdf_base64 = base64.b64encode(pdf_data).decode('utf-8')
+
+print(f"   PDF generated successfully ({len(pdf_data)} bytes)")
+
+pdf_base64
+      `);
+
+      // Download PDF
+      const pdfBytes = atob(pdfResult);
+      const pdfArray = new Uint8Array(pdfBytes.length);
+      for (let i = 0; i < pdfBytes.length; i++) {
+        pdfArray[i] = pdfBytes.charCodeAt(i);
+      }
+
+      const blob = new Blob([pdfArray], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `ssvep_report_${session.subject_id}_${new Date().toISOString().split('T')[0]}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      setLoadingMessage('');
+      setSuccess('PDF report generated successfully!');
+      setTimeout(() => setSuccess(null), 3000);
+
+    } catch (err) {
+      console.error('Error generating PDF:', err);
+      setError(`Error generating PDF report: ${err}`);
+      setLoadingMessage('');
+    }
+  }, [analysisResults, session, rawEdfData, pyodideReady]);
+
+  // Drag and drop handlers
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+  }, []);
+
+  const handleDragEnter = useCallback((e: React.DragEvent, type: 'edf' | 'csv') => {
+    e.preventDefault();
+    if (type === 'edf') {
+      setDragActiveEdf(true);
+    } else {
+      setDragActiveCsv(true);
+    }
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent, type: 'edf' | 'csv') => {
+    e.preventDefault();
+    if (type === 'edf') {
+      setDragActiveEdf(false);
+    } else {
+      setDragActiveCsv(false);
+    }
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent, type: 'edf' | 'csv') => {
+    e.preventDefault();
+
+    if (type === 'edf') {
+      setDragActiveEdf(false);
+    } else {
+      setDragActiveCsv(false);
+    }
+
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0) {
+      if (type === 'edf') {
+        handleEdfFilesSelect(files); // Now handles multiple files
+      } else {
+        handleCsvFilesSelect(files); // Now handles multiple files
+      }
+    }
+  }, [handleEdfFilesSelect, handleCsvFilesSelect]);
+
+  return (
+    <div className="min-h-screen bg-[var(--dark-bg)] text-[var(--dark-text)] relative">
+      {/* Loading Overlay */}
+      {isAnalyzing && (
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50">
+          <div className="bg-[var(--dark-card)] border border-[var(--dark-border)] rounded-lg p-8 max-w-md mx-4 shadow-2xl">
+            <div className="flex items-center space-x-4">
+              {/* Spinning wheel */}
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[var(--gold)]"></div>
+              <div className="flex-1">
+                <h3 className="text-lg font-semibold text-[var(--dark-text)] mb-2">Processing Analysis</h3>
+                <p className="text-sm text-[var(--dark-text-secondary)] mb-3">{loadingMessage}</p>
+                <div className="w-full bg-[var(--dark-border)] rounded-full h-2 mb-1">
+                  <div
+                    className="bg-[var(--gold)] h-2 rounded-full transition-all duration-300"
+                    style={{ width: `${analysisProgress}%` }}
+                  ></div>
+                </div>
+                <p className="text-xs text-[var(--dark-text-secondary)]">{analysisProgress}% complete</p>
+              </div>
+            </div>
+            <p className="text-xs text-[var(--dark-text-secondary)] mt-4 text-center italic">
+              Please wait while we process your EEG data and generate visualizations...
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Header */}
+      <div className="bg-[var(--dark-card)] border-b border-[var(--dark-border)] p-6">
+        <h1 className="text-3xl font-bold text-[var(--gold)] mb-2">SSVEP Detection Tool</h1>
+        <p className="text-[var(--dark-text-secondary)]">
+          Automated analysis of Steady-State Visual Evoked Potentials with session management and synchronization
+        </p>
+        
+        {/* Progress Steps */}
+        <div className="flex items-center space-x-4 mt-4">
+          {[
+            { key: 'upload', label: 'Upload Files' },
+            { key: 'pairing', label: 'Pair Files' },
+            { key: 'sync', label: 'Synchronize' },
+            { key: 'manual_adjust', label: 'Adjust Periods' },
+            { key: 'analysis', label: 'Analysis' },
+            { key: 'results', label: 'Results' }
+          ].map((step, index) => (
+            <div key={step.key} className="flex items-center">
+              <button 
+                onClick={() => {
+                  const stepOrder = ['upload', 'pairing', 'sync', 'manual_adjust', 'analysis', 'results'];
+                  const currentIndex = stepOrder.indexOf(currentStep);
+                  // Allow navigation to completed steps or current step
+                  if (index <= currentIndex || (index === currentIndex + 1 && canProceedToNextStep(step.key))) {
+                    setCurrentStep(step.key);
+                  }
+                }}
+                disabled={!canNavigateToStep(step.key)}
+                className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-colors ${
+                  currentStep === step.key 
+                    ? 'bg-[var(--gold)] text-[var(--navy)]'
+                    : canNavigateToStep(step.key)
+                    ? 'bg-green-600 text-white hover:bg-green-700 cursor-pointer'
+                    : 'bg-[var(--dark-bg-secondary)] text-[var(--dark-text-secondary)] cursor-not-allowed'
+                }`}>
+                {canNavigateToStep(step.key) && currentStep !== step.key ? '✓' : index + 1}
+              </button>
+              <span className={`ml-2 text-sm ${
+                currentStep === step.key ? 'text-[var(--gold)]' : 'text-[var(--dark-text-secondary)]'
+              }`}>
+                {step.label}
+              </span>
+              {index < 4 && <div className="w-8 h-px bg-[var(--dark-border)] mx-2" />}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Status Messages */}
+      {(error || success || loadingMessage) && (
+        <div className="p-4">
+          {error && (
+            <div className="bg-red-900/50 border border-red-600 text-red-200 px-4 py-3 rounded mb-4">
+              <strong>Error:</strong> {error}
+              <button 
+                onClick={() => setError(null)}
+                className="float-right text-red-400 hover:text-red-200"
+              >
+                ×
+              </button>
+            </div>
+          )}
+          
+          {success && (
+            <div className="bg-green-900/50 border border-green-600 text-green-200 px-4 py-3 rounded mb-4">
+              {success}
+            </div>
+          )}
+          
+          {loadingMessage && (
+            <div className="bg-blue-900/50 border border-blue-600 text-blue-200 px-4 py-3 rounded mb-4 flex items-center">
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-400 mr-3"></div>
+              {loadingMessage}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Pyodide Loading */}
+      {pyodideLoading && (
+        <div className="flex items-center justify-center p-8">
+          <div className="bg-[var(--dark-card)] border border-[var(--dark-border)] rounded-lg p-8 max-w-md w-full">
+            <div className="text-center">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[var(--gold)] mx-auto mb-4"></div>
+              <h3 className="text-lg font-semibold text-[var(--dark-text)] mb-2">Loading SSVEP Analysis Environment</h3>
+              <p className="text-[var(--dark-text-secondary)]">{loadingMessage || 'Initializing...'}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Main Content */}
+      {pyodideReady && (
+        <div className="p-6">
+          
+          {/* Step 1: File Upload */}
+          {currentStep === 'upload' && (
+            <div className="space-y-6">
+              <h2 className="text-2xl font-bold text-[var(--dark-text)]">Step 1: Upload Files</h2>
+              
+              <div className="grid md:grid-cols-2 gap-6">
+                {/* EDF File Upload */}
+                <div className="space-y-4">
+                  <h3 className="text-lg font-semibold text-[var(--dark-text)]">EEG Data (EDF Files)</h3>
+                  <div
+                    className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
+                      dragActiveEdf
+                        ? 'border-[var(--gold)] bg-yellow-900/20'
+                        : 'border-[var(--dark-border)] hover:border-[var(--gold)]'
+                    }`}
+                    onDragOver={handleDragOver}
+                    onDragEnter={(e) => handleDragEnter(e, 'edf')}
+                    onDragLeave={(e) => handleDragLeave(e, 'edf')}
+                    onDrop={(e) => handleDrop(e, 'edf')}
+                  >
+                    {edfFiles.length > 0 ? (
+                      <div className="space-y-3">
+                        <div className="text-green-400">
+                          <div className="text-4xl mb-2">📊</div>
+                          <div className="font-medium">{edfFiles.length} EDF file{edfFiles.length > 1 ? 's' : ''} uploaded</div>
+                        </div>
+                        <div className="max-h-32 overflow-y-auto space-y-2">
+                          {edfFiles.map((file, index) => (
+                            <div key={index} className="flex items-center justify-between bg-[var(--dark-bg-secondary)] rounded p-2 text-sm">
+                              <div className="flex-1 text-left">
+                                <div className="font-medium text-[var(--dark-text)]">{file.name}</div>
+                                <div className="text-[var(--dark-text-secondary)]">{(file.size / (1024 * 1024)).toFixed(2)} MB</div>
+                              </div>
+                              <button
+                                onClick={() => removeEdfFile(file.name)}
+                                className="text-red-400 hover:text-red-300 ml-2"
+                                title="Remove file"
+                              >
+                                ×
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <div>
+                        <div className="text-4xl mb-4 text-[var(--dark-text-secondary)]">📊</div>
+                        <p className="text-[var(--dark-text)] mb-2">Drag and drop EDF files here</p>
+                        <p className="text-sm text-[var(--dark-text-secondary)]">Multiple files supported • or click to browse</p>
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          accept=".edf"
+                          multiple
+                          onChange={(e) => e.target.files && handleEdfFilesSelect(e.target.files)}
+                          className="hidden"
+                        />
+                        <button
+                          onClick={() => fileInputRef.current?.click()}
+                          className="mt-4 bg-[var(--gold)] text-[var(--navy)] px-4 py-2 rounded-lg font-medium hover:bg-yellow-400 transition-colors"
+                        >
+                          Browse Files
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* CSV File Upload */}
+                <div className="space-y-4">
+                  <h3 className="text-lg font-semibold text-[var(--dark-text)]">Annotations (CSV Files)</h3>
+                  <div
+                    className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
+                      dragActiveCsv
+                        ? 'border-[var(--gold)] bg-yellow-900/20'
+                        : 'border-[var(--dark-border)] hover:border-[var(--gold)]'
+                    }`}
+                    onDragOver={handleDragOver}
+                    onDragEnter={(e) => handleDragEnter(e, 'csv')}
+                    onDragLeave={(e) => handleDragLeave(e, 'csv')}
+                    onDrop={(e) => handleDrop(e, 'csv')}
+                  >
+                    {csvFiles.length > 0 ? (
+                      <div className="space-y-3">
+                        <div className="text-green-400">
+                          <div className="text-4xl mb-2">📋</div>
+                          <div className="font-medium">{csvFiles.length} CSV file{csvFiles.length > 1 ? 's' : ''} uploaded</div>
+                        </div>
+                        <div className="max-h-32 overflow-y-auto space-y-2">
+                          {csvFiles.map((file, index) => (
+                            <div key={index} className="flex items-center justify-between bg-[var(--dark-bg-secondary)] rounded p-2 text-sm">
+                              <div className="flex-1 text-left">
+                                <div className="font-medium text-[var(--dark-text)]">{file.name}</div>
+                                <div className="text-[var(--dark-text-secondary)]">{(file.size / 1024).toFixed(2)} KB</div>
+                              </div>
+                              <button
+                                onClick={() => removeCsvFile(file.name)}
+                                className="text-red-400 hover:text-red-300 ml-2"
+                                title="Remove file"
+                              >
+                                ×
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <div>
+                        <div className="text-4xl mb-4 text-[var(--dark-text-secondary)]">📋</div>
+                        <p className="text-[var(--dark-text)] mb-2">Drag and drop CSV files here</p>
+                        <p className="text-sm text-[var(--dark-text-secondary)]">Multiple files supported • or click to browse</p>
+                        <input
+                          ref={csvInputRef}
+                          type="file"
+                          accept=".csv"
+                          multiple
+                          onChange={(e) => e.target.files && handleCsvFilesSelect(e.target.files)}
+                          className="hidden"
+                        />
+                        <button
+                          onClick={() => csvInputRef.current?.click()}
+                          className="mt-4 bg-[var(--gold)] text-[var(--navy)] px-4 py-2 rounded-lg font-medium hover:bg-yellow-400 transition-colors"
+                        >
+                          Browse Files
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* CSV Format Info */}
+              <div className="bg-[var(--dark-card)] border border-[var(--dark-border)] rounded-lg p-4">
+                <h4 className="text-md font-semibold text-[var(--dark-text)] mb-2">Expected CSV Format:</h4>
+                <div className="text-sm text-[var(--dark-text-secondary)] space-y-1">
+                  <div className="font-mono bg-[var(--dark-bg-secondary)] p-2 rounded">
+                    experiment,start_time,duration,label<br/>
+                    Exp1,12.3,2.0,stim1<br/>
+                    Exp1,32.1,2.0,stim2<br/>
+                    Exp2,5.0,2.0,stim1
+                  </div>
+                  <p><strong>experiment:</strong> Name of the experiment</p>
+                  <p><strong>start_time:</strong> Start time in seconds from beginning of EDF</p>
+                  <p><strong>duration:</strong> Duration of stimulation period in seconds</p>
+                  <p><strong>label:</strong> Optional label for the stimulation period</p>
+                </div>
+              </div>
+
+              {/* Continue Button */}
+              <div className="flex justify-center">
+                <button
+                  onClick={() => {
+                    markStepCompleted('upload');
+                    setCurrentStep('pairing');
+                  }}
+                  disabled={edfFiles.length === 0 || csvFiles.length === 0}
+                  className="bg-[var(--gold)] text-[var(--navy)] px-8 py-3 rounded-lg font-medium hover:bg-yellow-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Continue to File Pairing
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Step 2: File Pairing */}
+          {currentStep === 'pairing' && (
+            <div className="space-y-6">
+              <h2 className="text-2xl font-bold text-[var(--dark-text)]">Step 2: Pair EDF and CSV Files</h2>
+
+              <div className="bg-[var(--dark-card)] border border-[var(--dark-border)] rounded-lg p-6">
+                <h3 className="text-lg font-semibold text-[var(--dark-text)] mb-4">File Pairing</h3>
+                <p className="text-[var(--dark-text-secondary)] mb-6">
+                  Match each EDF file with its corresponding CSV annotations. Each pair represents one recording session/experiment.
+                </p>
+
+                {/* Unpaired Files */}
+                <div className="grid md:grid-cols-2 gap-6 mb-6">
+                  <div>
+                    <h4 className="font-medium text-[var(--dark-text)] mb-3">Available EDF Files</h4>
+                    <div className="space-y-2 max-h-48 overflow-y-auto">
+                      {edfFiles.filter(edf => !filePairs.some(pair => pair.edf_file.name === edf.name)).map((file, index) => (
+                        <div key={index} className="bg-[var(--dark-bg-secondary)] rounded p-3 border border-[var(--dark-border)]">
+                          <div className="font-medium text-[var(--dark-text)]">{file.name}</div>
+                          <div className="text-sm text-[var(--dark-text-secondary)]">{(file.size / (1024 * 1024)).toFixed(2)} MB</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <h4 className="font-medium text-[var(--dark-text)] mb-3">Available CSV Files</h4>
+                    <div className="space-y-2 max-h-48 overflow-y-auto">
+                      {csvFiles.filter(csv => !filePairs.some(pair => pair.csv_file.name === csv.name)).map((file, index) => (
+                        <div key={index} className="bg-[var(--dark-bg-secondary)] rounded p-3 border border-[var(--dark-border)]">
+                          <div className="font-medium text-[var(--dark-text)]">{file.name}</div>
+                          <div className="text-sm text-[var(--dark-text-secondary)]">{(file.size / 1024).toFixed(2)} KB</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Pairing Controls */}
+                <div className="bg-[var(--dark-bg-secondary)] rounded-lg p-4 mb-6">
+                  <h4 className="font-medium text-[var(--dark-text)] mb-3">Create New Pair</h4>
+                  <div className="grid md:grid-cols-3 gap-4 items-end">
+                    <div>
+                      <label className="block text-sm font-medium text-[var(--dark-text)] mb-2">Select EDF File</label>
+                      <select
+                        className="w-full p-2 bg-[var(--dark-bg)] border border-[var(--dark-border)] rounded text-[var(--dark-text)]"
+                        id="edf-select"
+                      >
+                        <option value="">Choose EDF file...</option>
+                        {edfFiles.filter(edf => !filePairs.some(pair => pair.edf_file.name === edf.name)).map((file, index) => (
+                          <option key={index} value={file.name}>{file.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-[var(--dark-text)] mb-2">Select CSV File</label>
+                      <select
+                        className="w-full p-2 bg-[var(--dark-bg)] border border-[var(--dark-border)] rounded text-[var(--dark-text)]"
+                        id="csv-select"
+                      >
+                        <option value="">Choose CSV file...</option>
+                        {csvFiles.filter(csv => !filePairs.some(pair => pair.csv_file.name === csv.name)).map((file, index) => (
+                          <option key={index} value={file.name}>{file.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <button
+                        onClick={() => {
+                          const edfSelect = document.getElementById('edf-select') as HTMLSelectElement;
+                          const csvSelect = document.getElementById('csv-select') as HTMLSelectElement;
+
+                          if (edfSelect.value && csvSelect.value) {
+                            const edfFile = edfFiles.find(f => f.name === edfSelect.value);
+                            const csvFile = csvFiles.find(f => f.name === csvSelect.value);
+
+                            if (edfFile && csvFile) {
+                              createFilePair(edfFile, csvFile);
+                              edfSelect.value = '';
+                              csvSelect.value = '';
+                            }
+                          }
+                        }}
+                        className="w-full px-4 py-2 bg-[var(--gold)] text-[var(--navy)] rounded-lg font-medium hover:bg-yellow-400 transition-colors"
+                      >
+                        Create Pair
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Existing File Pairs */}
+                {filePairs.length > 0 && (
+                  <div>
+                    <h4 className="font-medium text-[var(--dark-text)] mb-3">File Pairs ({filePairs.length})</h4>
+                    <div className="space-y-3">
+                      {filePairs.map((pair) => (
+                        <div key={pair.id} className="bg-[var(--dark-bg-secondary)] rounded-lg p-4 border border-[var(--dark-border)]">
+                          <div className="flex items-center justify-between">
+                            <div className="flex-1">
+                              <div className="grid md:grid-cols-2 gap-4">
+                                <div>
+                                  <div className="text-sm text-[var(--dark-text-secondary)]">EDF File</div>
+                                  <div className="font-medium text-[var(--dark-text)]">{pair.edf_file.name}</div>
+                                </div>
+                                <div>
+                                  <div className="text-sm text-[var(--dark-text-secondary)]">CSV File</div>
+                                  <div className="font-medium text-[var(--dark-text)]">{pair.csv_file.name}</div>
+                                </div>
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => removeFilePair(pair.id)}
+                              className="ml-4 text-red-400 hover:text-red-300 p-2"
+                              title="Remove pair"
+                            >
+                              🗑️
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Continue Button */}
+              <div className="flex justify-center">
+                <button
+                  onClick={() => {
+                    markStepCompleted('pairing');
+                    setCurrentStep('sync');
+                  }}
+                  disabled={filePairs.length === 0}
+                  className="bg-[var(--gold)] text-[var(--navy)] px-8 py-3 rounded-lg font-medium hover:bg-yellow-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Continue to Synchronization
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Step 3: Synchronization */}
+          {currentStep === 'sync' && (
+            <div className="space-y-6">
+              <h2 className="text-2xl font-bold text-[var(--dark-text)]">Step 3: Synchronize Data</h2>
+
+              <div className="bg-[var(--dark-card)] border border-[var(--dark-border)] rounded-lg p-6">
+                <h3 className="text-lg font-semibold text-[var(--dark-text)] mb-4">Individual File Pair Synchronization</h3>
+                <p className="text-[var(--dark-text-secondary)] mb-6">
+                  Each EDF-CSV pair requires individual synchronization. Process each pair to extract timing information and apply sync offsets.
+                </p>
+
+                {/* File Pairs Processing */}
+                <div className="space-y-4">
+                  {filePairs.map((pair, index) => (
+                    <div key={pair.id} className="bg-[var(--dark-bg-secondary)] rounded-lg p-4 border border-[var(--dark-border)]">
+                      <div className="flex items-center justify-between mb-3">
+                        <h4 className="font-medium text-[var(--dark-text)]">
+                          Pair {index + 1}: {pair.edf_file.name} + {pair.csv_file.name}
+                        </h4>
+                        <div className="flex items-center space-x-2">
+                          {pair.processed ? (
+                            <span className="text-green-400 text-sm">✅ Processed</span>
+                          ) : (
+                            <span className="text-yellow-400 text-sm">⏳ Pending</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {!pair.processed ? (
+                        <div className="space-y-3">
+                          <div className="grid md:grid-cols-2 gap-4">
+                            <div>
+                              <label className="block text-sm font-medium text-[var(--dark-text)] mb-2">
+                                Sync Offset (seconds)
+                              </label>
+                              <input
+                                type="number"
+                                step="0.1"
+                                defaultValue="0"
+                                className="w-full p-2 bg-[var(--dark-bg)] border border-[var(--dark-border)] rounded text-[var(--dark-text)]"
+                                id={`sync-${pair.id}`}
+                              />
+                            </div>
+                            <div className="flex items-end">
+                              <button
+                                onClick={() => processFilePair(pair.id)}
+                                className="w-full px-4 py-2 bg-[var(--gold)] text-[var(--navy)] rounded-lg font-medium hover:bg-yellow-400 transition-colors"
+                              >
+                                Process Pair
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-sm text-[var(--dark-text-secondary)]">
+                          <div>Sync offset: {pair.sync_offset?.toFixed(2) || 0}s</div>
+                          {pair.session_fragment && (
+                            <div>Experiments found: {pair.session_fragment.experiments?.length || 0}</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Process All Button */}
+                {filePairs.length > 0 && !filePairs.every(pair => pair.processed) && (
+                  <div className="mt-6 text-center">
+                    <button
+                      onClick={processAllPairs}
+                      className="px-6 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors"
+                    >
+                      Process All Pairs
+                    </button>
+                  </div>
+                )}
+
+                {/* Merge Session Button */}
+                {filePairs.length > 0 && filePairs.every(pair => pair.processed) && (
+                  <div className="mt-6 text-center">
+                    <button
+                      onClick={mergeIntoSession}
+                      className="px-8 py-3 bg-[var(--gold)] text-[var(--navy)] rounded-lg font-medium hover:bg-yellow-400 transition-colors"
+                    >
+                      Merge into Single Session
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Show merged session info if available */}
+          {currentStep === 'sync' && session && (
+            <div className="bg-[var(--dark-card)] border border-[var(--dark-border)] rounded-lg p-6">
+              <h3 className="text-lg font-semibold text-[var(--dark-text)] mb-4">Merged Session Overview</h3>
+                <div className="grid md:grid-cols-3 gap-6">
+                  <div>
+                    <h4 className="font-medium text-[var(--dark-text)] mb-2">File Pairs</h4>
+                    <div className="text-sm text-[var(--dark-text-secondary)] space-y-1">
+                      <div>Total Pairs: {filePairs.length}</div>
+                      <div>Processed: {filePairs.filter(p => p.processed).length}</div>
+                      <div>Sampling Rate: {rawEdfData?.fs || 'N/A'} Hz</div>
+                    </div>
+                  </div>
+                  <div>
+                    <h4 className="font-medium text-[var(--dark-text)] mb-2">Combined Data</h4>
+                    <div className="text-sm text-[var(--dark-text-secondary)] space-y-1">
+                      <div>Total Duration: {rawEdfData?.duration_seconds?.toFixed(1) || 'N/A'} seconds</div>
+                      <div>Channels: {rawEdfData?.n_channels || 'N/A'}</div>
+                      <div>Experiments: {session.experiments.length}</div>
+                    </div>
+                  </div>
+                  <div>
+                    <h4 className="font-medium text-[var(--dark-text)] mb-2">Stimulation</h4>
+                    <div className="text-sm text-[var(--dark-text-secondary)] space-y-1">
+                      <div>Total Periods: {session.experiments.reduce((sum, exp) => sum + exp.stimulation_periods.length, 0)}</div>
+                      <div>Per File: {session.experiments.length > 0 ? (session.experiments.reduce((sum, exp) => sum + exp.stimulation_periods.length, 0) / filePairs.length).toFixed(1) : 'N/A'} avg</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-green-900/20 border border-green-600 rounded-lg p-4">
+                <h4 className="font-medium text-green-200 mb-2">✅ Multi-File Session Created</h4>
+                <p className="text-green-100 text-sm">
+                  Successfully merged {filePairs.length} file pairs into a single session. Each file pair has been individually synchronized and combined into one analysis session.
+                </p>
+              </div>
+
+              {/* Continue Button */}
+              <div className="flex justify-center mt-6">
+                <button
+                  onClick={() => {
+                    markStepCompleted('sync');
+                    setCurrentStep('manual_adjust');
+                  }}
+                  className="bg-[var(--gold)] text-[var(--navy)] px-8 py-3 rounded-lg font-medium hover:bg-yellow-400 transition-colors"
+                >
+                  Continue to Manual Adjustments
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Step 4: Manual Adjustments */}
+          {currentStep === 'manual_adjust' && session && (
+            <div className="space-y-6">
+              <h2 className="text-2xl font-bold text-[var(--dark-text)]">Step 4: Fine-tune Stimulation Periods</h2>
+                    {/* Timeline axis */}
+                    <div className="absolute bottom-2 left-0 right-0 h-1 bg-[var(--dark-border)]"></div>
+                    
+                    {/* Time markers */}
+                    {Array.from({length: Math.ceil(rawEdfData.duration_seconds / 30) + 1}, (_, i) => i * 30).filter(time => time <= rawEdfData.duration_seconds).map(time => (
+                      <div key={time} className="absolute bottom-0" style={{ left: `${(time / rawEdfData.duration_seconds) * 100}%` }}>
+                        <div className="w-px h-4 bg-[var(--dark-text-secondary)]"></div>
+                        <div className="text-xs text-[var(--dark-text-secondary)] mt-1 transform -translate-x-1/2">
+                          {time}s
+                        </div>
+                      </div>
+                    ))}
+                    {/* Final time marker */}
+                    <div className="absolute bottom-0" style={{ left: '100%' }}>
+                      <div className="w-px h-4 bg-[var(--dark-text-secondary)]"></div>
+                      <div className="text-xs text-[var(--dark-text-secondary)] mt-1 transform -translate-x-1/2">
+                        {rawEdfData.duration_seconds.toFixed(1)}s
+                      </div>
+                    </div>
+                    
+                    {/* Stimulation periods */}
+                    {session.experiments.map((exp, expIdx) =>
+                      exp.stimulation_periods.map((period, periodIdx) => {
+                        const left = Math.max(0, (period.start_time / rawEdfData.duration_seconds) * 100);
+                        const endTime = Math.min(period.start_time + period.duration, rawEdfData.duration_seconds);
+                        const width = Math.max(0.5, ((endTime - Math.max(0, period.start_time)) / rawEdfData.duration_seconds) * 100);
+                        const colors = ['bg-red-500', 'bg-blue-500', 'bg-green-500', 'bg-yellow-500'];
+                        const color = colors[expIdx % colors.length];
+
+                        // Only show periods that overlap with the recording
+                        if (period.start_time >= rawEdfData.duration_seconds || period.start_time + period.duration <= 0) {
+                          return null;
+                        }
+
+                        const isPartiallyOutOfBounds = period.start_time < 0 || period.start_time + period.duration > rawEdfData.duration_seconds;
+
+                        return (
+                          <div
+                            key={`${expIdx}-${periodIdx}`}
+                            className={`absolute ${color} ${isPartiallyOutOfBounds ? 'opacity-40 border border-red-400' : 'opacity-70'} rounded`}
+                            style={{
+                              left: `${left}%`,
+                              width: `${width}%`,
+                              top: `${10 + expIdx * 15}px`,
+                              height: '12px'
+                            }}
+                            title={`${exp.name}: ${period.label} (${period.start_time.toFixed(1)}s - ${(period.start_time + period.duration).toFixed(1)}s)${isPartiallyOutOfBounds ? ' - PARTIALLY OUT OF BOUNDS' : ''}`}
+                          >
+                            <div className="text-xs text-white px-1 truncate">
+                              {period.label}{isPartiallyOutOfBounds ? ' ⚠️' : ''}
+                            </div>
+                          </div>
+                        );
+                      }).filter(Boolean)
+                    )}
+                    
+                    {/* Legend */}
+                    <div className="absolute top-2 right-2 text-xs">
+                      {session.experiments.map((exp, expIdx) => {
+                        const colors = ['bg-red-500', 'bg-blue-500', 'bg-green-500', 'bg-yellow-500'];
+                        const color = colors[expIdx % colors.length];
+                        return (
+                          <div key={expIdx} className="flex items-center space-x-2 mb-1">
+                            <div className={`w-3 h-3 ${color} rounded`}></div>
+                            <span className="text-[var(--dark-text-secondary)]">{exp.name}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-center space-x-4">
+                <button
+                  onClick={() => setShowSyncModal(true)}
+                  className="bg-[var(--gold)] text-[var(--navy)] px-8 py-3 rounded-lg font-medium hover:bg-yellow-400 transition-colors"
+                >
+                  Manual Sync (Enter Offset)
+                </button>
+                <button
+                  onClick={() => applySynchronization(0)}
+                  className="bg-gray-600 text-white px-8 py-3 rounded-lg font-medium hover:bg-gray-700 transition-colors"
+                >
+                  Skip Sync (Use as-is)
+                </button>
+              </div>
+
+              {/* Experiments Preview */}
+              <div className="bg-[var(--dark-card)] border border-[var(--dark-border)] rounded-lg p-4">
+                <h4 className="font-medium text-[var(--dark-text)] mb-3">Experiments Preview</h4>
+                <div className="space-y-2">
+                  {session.experiments.map((exp, expIdx) => (
+                    <div key={expIdx} className="bg-[var(--dark-bg-secondary)] p-3 rounded">
+                      <div className="font-medium text-[var(--dark-text)]">{exp.name}</div>
+                      <div className="text-sm text-[var(--dark-text-secondary)] mt-1">
+                        {exp.stimulation_periods.length} periods: {
+                          exp.stimulation_periods.map(p => 
+                            `${p.start_time.toFixed(1)}s (${p.duration}s)`
+                          ).join(', ')
+                        }
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Step 4: Manual Adjustments */}
+          {currentStep === 'manual_adjust' && session && (
+            <div className="space-y-6">
+              <h2 className="text-2xl font-bold text-[var(--dark-text)]">Step 4: Fine-tune Stimulation Periods</h2>
+              
+              <div className="bg-[var(--dark-card)] border border-[var(--dark-border)] rounded-lg p-6">
+                <h3 className="text-lg font-semibold text-[var(--dark-text)] mb-4">Stimulation Periods</h3>
+                <p className="text-[var(--dark-text-secondary)] mb-4">
+                  Review and adjust the timing of stimulation periods if needed. 
+                  {session.sync_offset !== undefined && (
+                    <>
+                      <br />
+                      <strong>Applied sync offset: {session.sync_offset.toFixed(2)}s</strong>
+                      <br />
+                      <em>Note: All timestamps shown are original time + sync offset</em>
+                    </>
+                  )}
+                </p>
+                
+                <div className="space-y-6">
+                  {session.experiments && session.experiments.length > 0 ? session.experiments.map((exp, expIdx) => (
+                    <div key={expIdx} className="bg-[var(--dark-bg-secondary)] border border-[var(--dark-border)] rounded p-4">
+                      <div className="flex justify-between items-center mb-4">
+                        <h4 className="font-medium text-[var(--dark-text)] text-lg">{exp.name}</h4>
+                        <span className="text-sm text-[var(--dark-text-secondary)] bg-[var(--dark-bg)] px-2 py-1 rounded">
+                          {exp.stimulation_periods ? exp.stimulation_periods.length : 0} periods
+                        </span>
+                      </div>
+                      <div className="space-y-3">
+                        {exp.stimulation_periods && exp.stimulation_periods.length > 0 ? exp.stimulation_periods.map((period, periodIdx) => (
+                          <div key={periodIdx} className="flex items-center space-x-4 bg-[var(--dark-card)] p-3 rounded border border-[var(--dark-border)]">
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm font-medium text-[var(--dark-text)]">
+                                {period.label || `Period ${periodIdx + 1}`}
+                              </div>
+                              {session.sync_offset !== undefined && (
+                                <div className="text-xs text-[var(--dark-text-secondary)] mt-1">
+                                  Original: {(period.start_time - session.sync_offset).toFixed(1)}s → Current: {period.start_time.toFixed(1)}s
+                                </div>
+                              )}
+                            </div>
+                            <div className="flex items-center space-x-2">
+                              <label className="text-xs text-[var(--dark-text-secondary)] whitespace-nowrap">Start:</label>
+                              <input
+                                type="number"
+                                step="0.1"
+                                value={period.start_time}
+                                onChange={(e) => {
+                                  const updatedSession = { ...session };
+                                  updatedSession.experiments[expIdx].stimulation_periods[periodIdx].start_time = parseFloat(e.target.value);
+                                  setSession(updatedSession);
+                                }}
+                                className="w-20 px-2 py-1 text-sm bg-[var(--dark-bg)] border border-[var(--dark-border)] rounded text-[var(--dark-text)]"
+                              />
+                              <span className="text-xs text-[var(--dark-text-secondary)]">s</span>
+                            </div>
+                            <div className="flex items-center space-x-2">
+                              <label className="text-xs text-[var(--dark-text-secondary)] whitespace-nowrap">Duration:</label>
+                              <input
+                                type="number"
+                                step="0.1"
+                                value={period.duration}
+                                onChange={(e) => {
+                                  const updatedSession = { ...session };
+                                  updatedSession.experiments[expIdx].stimulation_periods[periodIdx].duration = parseFloat(e.target.value);
+                                  setSession(updatedSession);
+                                }}
+                                className="w-20 px-2 py-1 text-sm bg-[var(--dark-bg)] border border-[var(--dark-border)] rounded text-[var(--dark-text)]"
+                              />
+                              <span className="text-xs text-[var(--dark-text-secondary)]">s</span>
+                            </div>
+                          </div>
+                        )) : (
+                          <div className="text-[var(--dark-text-secondary)] text-center py-4">
+                            No stimulation periods found for this experiment
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )) : (
+                    <div className="text-[var(--dark-text-secondary)] text-center py-8">
+                      No experiments found in session
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex justify-center space-x-4">
+                <button
+                  onClick={() => {
+                    markStepCompleted('manual_adjust');
+                    setCurrentStep('analysis');
+                  }}
+                  className="bg-[var(--gold)] text-[var(--navy)] px-8 py-3 rounded-lg font-medium hover:bg-yellow-400 transition-colors"
+                >
+                  Proceed to Analysis
+                </button>
+                <button
+                  onClick={() => setCurrentStep('sync')}
+                  className="bg-gray-600 text-white px-8 py-3 rounded-lg font-medium hover:bg-gray-700 transition-colors"
+                >
+                  Back to Sync
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Step 5: Analysis */}
+          {currentStep === 'analysis' && session && (
+            <div className="space-y-6">
+              <h2 className="text-2xl font-bold text-[var(--dark-text)]">Step 5: SSVEP Analysis</h2>
+              
+              <div className="grid md:grid-cols-2 gap-6">
+                {/* Analysis Configuration */}
+                <div className="bg-[var(--dark-card)] border border-[var(--dark-border)] rounded-lg p-6">
+                  <h3 className="text-lg font-semibold text-[var(--dark-text)] mb-4">Analysis Configuration</h3>
+                  <div className="space-y-4">
+                    <div>
+                      <h4 className="font-medium text-[var(--dark-text)] mb-2">Target Frequency</h4>
+                      <div className="text-sm text-[var(--dark-text-secondary)]">
+                        40 Hz
+                      </div>
+                    </div>
+                    <div>
+                      <h4 className="font-medium text-[var(--dark-text)] mb-3">PSD Method</h4>
+                      <div className="flex gap-2">
+                        <label className={`flex items-center space-x-3 px-4 py-3 rounded-lg border-2 cursor-pointer transition-all duration-200 ${
+                          psdMethod === 'welch'
+                            ? 'border-[var(--gold)] bg-[var(--gold)]/10 shadow-sm'
+                            : 'border-[var(--dark-border)] hover:border-[var(--gold)]/50 hover:bg-[var(--dark-bg-secondary)]'
+                        }`}>
+                          <input
+                            type="radio"
+                            name="psdMethod"
+                            value="welch"
+                            checked={psdMethod === 'welch'}
+                            onChange={(e) => setPsdMethod(e.target.value as 'welch' | 'periodogram')}
+                            className="w-4 h-4 text-[var(--gold)] focus:ring-[var(--gold)] focus:ring-2"
+                          />
+                          <div>
+                            <div className="text-sm font-medium text-[var(--dark-text)]">Welch Method</div>
+                            <div className="text-xs text-[var(--dark-text-secondary)]">Windowed FFT (recommended)</div>
+                          </div>
+                        </label>
+                        <label className={`flex items-center space-x-3 px-4 py-3 rounded-lg border-2 cursor-pointer transition-all duration-200 ${
+                          psdMethod === 'periodogram'
+                            ? 'border-[var(--gold)] bg-[var(--gold)]/10 shadow-sm'
+                            : 'border-[var(--dark-border)] hover:border-[var(--gold)]/50 hover:bg-[var(--dark-bg-secondary)]'
+                        }`}>
+                          <input
+                            type="radio"
+                            name="psdMethod"
+                            value="periodogram"
+                            checked={psdMethod === 'periodogram'}
+                            onChange={(e) => setPsdMethod(e.target.value as 'welch' | 'periodogram')}
+                            className="w-4 h-4 text-[var(--gold)] focus:ring-[var(--gold)] focus:ring-2"
+                          />
+                          <div>
+                            <div className="text-sm font-medium text-[var(--dark-text)]">Full Periodogram</div>
+                            <div className="text-xs text-[var(--dark-text-secondary)]">Direct FFT</div>
+                          </div>
+                        </label>
+                      </div>
+                    </div>
+                    <div>
+                      <h4 className="font-medium text-[var(--dark-text)] mb-2">Analysis Methods</h4>
+                      <div className="text-sm text-[var(--dark-text-secondary)]">
+                        • Power Spectral Density ({psdMethod === 'welch' ? 'Welch' : 'Periodogram'})<br/>
+                        • Signal-to-Noise Ratio calculation<br/>
+                        • Per-experiment aggregation
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Plot Type Selection */}
+                <div className="bg-[var(--dark-card)] border border-[var(--dark-border)] rounded-lg p-6">
+                  <h3 className="text-lg font-semibold text-[var(--dark-text)] mb-4">Visualization Options</h3>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                    <label className={`flex items-center space-x-3 p-3 rounded-lg border-2 cursor-pointer transition-all duration-200 ${
+                      selectedPlotTypes.psd
+                        ? 'border-[var(--gold)] bg-[var(--gold)]/10 shadow-sm'
+                        : 'border-[var(--dark-border)] hover:border-[var(--gold)]/50 hover:bg-[var(--dark-bg-secondary)]'
+                    }`}>
+                      <input
+                        type="checkbox"
+                        data-plot="psd"
+                        checked={selectedPlotTypes.psd}
+                        onChange={(e) => setSelectedPlotTypes(prev => ({ ...prev, psd: e.target.checked }))}
+                        className="sr-only"
+                      />
+                      <div className="flex-1">
+                        <div className="text-sm font-medium text-[var(--dark-text)]">Power Spectral Density</div>
+                        <div className="text-xs text-[var(--dark-text-secondary)]">Frequency domain analysis</div>
+                      </div>
+                      {selectedPlotTypes.psd && (
+                        <div className="w-2 h-2 bg-[var(--gold)] rounded-full"></div>
+                      )}
+                    </label>
+
+                    <label className={`flex items-center space-x-3 p-3 rounded-lg border-2 cursor-pointer transition-all duration-200 ${
+                      selectedPlotTypes.snr
+                        ? 'border-[var(--gold)] bg-[var(--gold)]/10 shadow-sm'
+                        : 'border-[var(--dark-border)] hover:border-[var(--gold)]/50 hover:bg-[var(--dark-bg-secondary)]'
+                    }`}>
+                      <input
+                        type="checkbox"
+                        data-plot="snr"
+                        checked={selectedPlotTypes.snr}
+                        onChange={(e) => setSelectedPlotTypes(prev => ({ ...prev, snr: e.target.checked }))}
+                        className="sr-only"
+                      />
+                      <div className="flex-1">
+                        <div className="text-sm font-medium text-[var(--dark-text)]">SNR at Target Frequencies</div>
+                        <div className="text-xs text-[var(--dark-text-secondary)]">Signal-to-noise ratio analysis</div>
+                      </div>
+                      {selectedPlotTypes.snr && (
+                        <div className="w-2 h-2 bg-[var(--gold)] rounded-full"></div>
+                      )}
+                    </label>
+
+                    <label className={`flex items-center space-x-3 p-3 rounded-lg border-2 cursor-pointer transition-all duration-200 ${
+                      selectedPlotTypes.snrSpectrum
+                        ? 'border-[var(--gold)] bg-[var(--gold)]/10 shadow-sm'
+                        : 'border-[var(--dark-border)] hover:border-[var(--gold)]/50 hover:bg-[var(--dark-bg-secondary)]'
+                    }`}>
+                      <input
+                        type="checkbox"
+                        data-plot="snrSpectrum"
+                        checked={selectedPlotTypes.snrSpectrum}
+                        onChange={(e) => setSelectedPlotTypes(prev => ({ ...prev, snrSpectrum: e.target.checked }))}
+                        className="sr-only"
+                      />
+                      <div className="flex-1">
+                        <div className="text-sm font-medium text-[var(--dark-text)]">SNR Spectrum</div>
+                        <div className="text-xs text-[var(--dark-text-secondary)]">SNR across frequency spectrum (1-50 Hz)</div>
+                      </div>
+                      {selectedPlotTypes.snrSpectrum && (
+                        <div className="w-2 h-2 bg-[var(--gold)] rounded-full"></div>
+                      )}
+                    </label>
+
+                    <label className={`flex items-center space-x-3 p-3 rounded-lg border-2 cursor-pointer transition-all duration-200 ${
+                      selectedPlotTypes.timeSeries
+                        ? 'border-[var(--gold)] bg-[var(--gold)]/10 shadow-sm'
+                        : 'border-[var(--dark-border)] hover:border-[var(--gold)]/50 hover:bg-[var(--dark-bg-secondary)]'
+                    }`}>
+                      <input
+                        type="checkbox"
+                        data-plot="timeSeries"
+                        checked={selectedPlotTypes.timeSeries}
+                        onChange={(e) => setSelectedPlotTypes(prev => ({ ...prev, timeSeries: e.target.checked }))}
+                        className="sr-only"
+                      />
+                      <div className="flex-1">
+                        <div className="text-sm font-medium text-[var(--dark-text)]">Time Series</div>
+                        <div className="text-xs text-[var(--dark-text-secondary)]">Raw signal visualization</div>
+                      </div>
+                      {selectedPlotTypes.timeSeries && (
+                        <div className="w-2 h-2 bg-[var(--gold)] rounded-full"></div>
+                      )}
+                    </label>
+
+                    <label className={`flex items-center space-x-3 p-3 rounded-lg border-2 cursor-pointer transition-all duration-200 ${
+                      selectedPlotTypes.topography
+                        ? 'border-[var(--gold)] bg-[var(--gold)]/10 shadow-sm'
+                        : 'border-[var(--dark-border)] hover:border-[var(--gold)]/50 hover:bg-[var(--dark-bg-secondary)]'
+                    }`}>
+                      <input
+                        type="checkbox"
+                        data-plot="topography"
+                        checked={selectedPlotTypes.topography}
+                        onChange={(e) => setSelectedPlotTypes(prev => ({ ...prev, topography: e.target.checked }))}
+                        className="sr-only"
+                      />
+                      <div className="flex-1">
+                        <div className="text-sm font-medium text-[var(--dark-text)]">Topographical Maps</div>
+                        <div className="text-xs text-[var(--dark-text-secondary)]">Spatial distribution plots</div>
+                      </div>
+                      {selectedPlotTypes.topography && (
+                        <div className="w-2 h-2 bg-[var(--gold)] rounded-full"></div>
+                      )}
+                    </label>
+                  </div>
+                </div>
+
+                {/* Summary Plot Selection */}
+                <div className="bg-[var(--dark-card)] border border-[var(--dark-border)] rounded-lg p-6">
+                  <h3 className="text-lg font-semibold text-[var(--dark-text)] mb-4">Summary Analysis Options</h3>
+                  <p className="text-sm text-[var(--dark-text-secondary)] mb-4">
+                    Select summary plots that analyze data across all experiments:
+                  </p>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                    <label className={`flex items-center space-x-3 p-3 rounded-lg border-2 cursor-pointer transition-all duration-200 ${
+                      selectedSummaryPlots.channelSnrHeatmap
+                        ? 'border-[var(--gold)] bg-[var(--gold)]/10 shadow-sm'
+                        : 'border-[var(--dark-border)] hover:border-[var(--gold)]/50 hover:bg-[var(--dark-bg-secondary)]'
+                    }`}>
+                      <input
+                        type="checkbox"
+                        checked={selectedSummaryPlots.channelSnrHeatmap}
+                        onChange={(e) => setSelectedSummaryPlots(prev => ({ ...prev, channelSnrHeatmap: e.target.checked }))}
+                        className="sr-only"
+                      />
+                      <div className="flex-1">
+                        <div className="text-sm font-medium text-[var(--dark-text)]">Channel SNR Heatmap</div>
+                        <div className="text-xs text-[var(--dark-text-secondary)]">40Hz SNR threshold analysis per channel/experiment</div>
+                      </div>
+                      {selectedSummaryPlots.channelSnrHeatmap && (
+                        <div className="w-2 h-2 bg-[var(--gold)] rounded-full"></div>
+                      )}
+                    </label>
+
+                    <label className={`flex items-center space-x-3 p-3 rounded-lg border-2 cursor-pointer transition-all duration-200 ${
+                      selectedSummaryPlots.frequencyResponse
+                        ? 'border-[var(--gold)] bg-[var(--gold)]/10 shadow-sm'
+                        : 'border-[var(--dark-border)] hover:border-[var(--gold)]/50 hover:bg-[var(--dark-bg-secondary)]'
+                    }`}>
+                      <input
+                        type="checkbox"
+                        checked={selectedSummaryPlots.frequencyResponse}
+                        onChange={(e) => setSelectedSummaryPlots(prev => ({ ...prev, frequencyResponse: e.target.checked }))}
+                        className="sr-only"
+                      />
+                      <div className="flex-1">
+                        <div className="text-sm font-medium text-[var(--dark-text)]">Frequency Response</div>
+                        <div className="text-xs text-[var(--dark-text-secondary)]">Overall frequency response analysis (placeholder)</div>
+                      </div>
+                      {selectedSummaryPlots.frequencyResponse && (
+                        <div className="w-2 h-2 bg-[var(--gold)] rounded-full"></div>
+                      )}
+                    </label>
+
+                    <label className={`flex items-center space-x-3 p-3 rounded-lg border-2 cursor-pointer transition-all duration-200 ${
+                      selectedSummaryPlots.channelComparison
+                        ? 'border-[var(--gold)] bg-[var(--gold)]/10 shadow-sm'
+                        : 'border-[var(--dark-border)] hover:border-[var(--gold)]/50 hover:bg-[var(--dark-bg-secondary)]'
+                    }`}>
+                      <input
+                        type="checkbox"
+                        checked={selectedSummaryPlots.channelComparison}
+                        onChange={(e) => setSelectedSummaryPlots(prev => ({ ...prev, channelComparison: e.target.checked }))}
+                        className="sr-only"
+                      />
+                      <div className="flex-1">
+                        <div className="text-sm font-medium text-[var(--dark-text)]">Channel Comparison</div>
+                        <div className="text-xs text-[var(--dark-text-secondary)]">Compare performance across channels (placeholder)</div>
+                      </div>
+                      {selectedSummaryPlots.channelComparison && (
+                        <div className="w-2 h-2 bg-[var(--gold)] rounded-full"></div>
+                      )}
+                    </label>
+
+                    <label className={`flex items-center space-x-3 p-3 rounded-lg border-2 cursor-pointer transition-all duration-200 ${
+                      selectedSummaryPlots.snrDistribution
+                        ? 'border-[var(--gold)] bg-[var(--gold)]/10 shadow-sm'
+                        : 'border-[var(--dark-border)] hover:border-[var(--gold)]/50 hover:bg-[var(--dark-bg-secondary)]'
+                    }`}>
+                      <input
+                        type="checkbox"
+                        checked={selectedSummaryPlots.snrDistribution}
+                        onChange={(e) => setSelectedSummaryPlots(prev => ({ ...prev, snrDistribution: e.target.checked }))}
+                        className="sr-only"
+                      />
+                      <div className="flex-1">
+                        <div className="text-sm font-medium text-[var(--dark-text)]">SNR Distribution</div>
+                        <div className="text-xs text-[var(--dark-text-secondary)]">Statistical distribution of SNR values (placeholder)</div>
+                      </div>
+                      {selectedSummaryPlots.snrDistribution && (
+                        <div className="w-2 h-2 bg-[var(--gold)] rounded-full"></div>
+                      )}
+                    </label>
+
+                    <label className={`flex items-center space-x-3 p-3 rounded-lg border-2 cursor-pointer transition-all duration-200 ${
+                      selectedSummaryPlots.experimentOverview
+                        ? 'border-[var(--gold)] bg-[var(--gold)]/10 shadow-sm'
+                        : 'border-[var(--dark-border)] hover:border-[var(--gold)]/50 hover:bg-[var(--dark-bg-secondary)]'
+                    }`}>
+                      <input
+                        type="checkbox"
+                        checked={selectedSummaryPlots.experimentOverview}
+                        onChange={(e) => setSelectedSummaryPlots(prev => ({ ...prev, experimentOverview: e.target.checked }))}
+                        className="sr-only"
+                      />
+                      <div className="flex-1">
+                        <div className="text-sm font-medium text-[var(--dark-text)]">Experiment Overview</div>
+                        <div className="text-xs text-[var(--dark-text-secondary)]">High-level experiment comparison (placeholder)</div>
+                      </div>
+                      {selectedSummaryPlots.experimentOverview && (
+                        <div className="w-2 h-2 bg-[var(--gold)] rounded-full"></div>
+                      )}
+                    </label>
+                  </div>
+                </div>
+
+                {/* Channel Selection */}
+                <div className="bg-[var(--dark-card)] border border-[var(--dark-border)] rounded-lg p-6">
+                  <h3 className="text-lg font-semibold text-[var(--dark-text)] mb-4">Channel Selection</h3>
+                  <p className="text-sm text-[var(--dark-text-secondary)] mb-4">
+                    Select which channels to include in the analysis:
+                  </p>
+
+                  {rawEdfData && rawEdfData.channel_names && rawEdfData.channel_names.length > 0 ? (
+                    <div className="space-y-2">
+                      {/* Select All / Deselect All */}
+                      <div className="flex items-center justify-between mb-6 pb-4 border-b border-[var(--dark-border)]">
+                        <div className="flex items-center space-x-3">
+                          <button
+                            onClick={() => setSelectedChannels(rawEdfData.channel_names)}
+                            className="px-4 py-2 text-sm font-medium bg-[var(--gold)] text-[var(--navy)] rounded-lg hover:bg-yellow-400 focus:outline-none focus:ring-2 focus:ring-[var(--gold)] focus:ring-offset-2 focus:ring-offset-[var(--dark-bg)] transition-all duration-200 shadow-sm"
+                          >
+                            Select All
+                          </button>
+                          <button
+                            onClick={() => setSelectedChannels([])}
+                            className="px-4 py-2 text-sm font-medium bg-[var(--dark-bg-secondary)] text-[var(--dark-text)] border border-[var(--dark-border)] rounded-lg hover:bg-[var(--dark-border)] focus:outline-none focus:ring-2 focus:ring-[var(--gold)] focus:ring-offset-2 focus:ring-offset-[var(--dark-bg)] transition-all duration-200"
+                          >
+                            Deselect All
+                          </button>
+                        </div>
+                        <div className="bg-[var(--dark-bg-secondary)] px-3 py-2 rounded-lg border border-[var(--dark-border)]">
+                          <span className="text-sm font-medium text-[var(--dark-text)]">
+                            {selectedChannels.length} of {rawEdfData.channel_names.length} selected
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Channel checkboxes */}
+                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                        {rawEdfData.channel_names.map((channelName: string, idx: number) => (
+                          <label
+                            key={idx}
+                            className={`flex items-center justify-between p-3 rounded-lg border-2 cursor-pointer transition-all duration-200 ${
+                              selectedChannels.includes(channelName)
+                                ? 'border-[var(--gold)] bg-[var(--gold)]/10 shadow-sm'
+                                : 'border-[var(--dark-border)] hover:border-[var(--gold)]/50 hover:bg-[var(--dark-bg-secondary)]'
+                            }`}
+                          >
+                            <div className="flex items-center space-x-2">
+                              <input
+                                type="checkbox"
+                                data-channel={channelName}
+                                checked={selectedChannels.includes(channelName)}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setSelectedChannels(prev => [...prev, channelName]);
+                                  } else {
+                                    setSelectedChannels(prev => prev.filter(ch => ch !== channelName));
+                                  }
+                                }}
+                                className="sr-only"
+                              />
+                              <span className="text-sm font-medium text-[var(--dark-text)]">{channelName}</span>
+                            </div>
+                            {selectedChannels.includes(channelName) && (
+                              <div className="w-2 h-2 bg-[var(--gold)] rounded-full flex-shrink-0"></div>
+                            )}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-[var(--dark-text-secondary)] text-center py-4">
+                      No channels available. Please load an EDF file first.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {isAnalyzing && (
+                <div className="bg-[var(--dark-card)] border border-[var(--dark-border)] rounded-lg p-6">
+                  <div className="flex items-center space-x-3 mb-3">
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-[var(--gold)]"></div>
+                    <span className="text-[var(--dark-text)]">Running Analysis...</span>
+                  </div>
+                  <div className="w-full bg-[var(--dark-bg-secondary)] rounded-full h-2">
+                    <div 
+                      className="bg-[var(--gold)] h-2 rounded-full transition-all duration-300" 
+                      style={{ width: `${analysisProgress}%` }}
+                    />
+                  </div>
+                  <div className="text-sm text-[var(--dark-text-secondary)] mt-2">
+                    {analysisProgress}% complete
+                  </div>
+                </div>
+              )}
+
+              <div className="flex justify-center mt-8">
+                <button
+                  onClick={runAnalysis}
+                  disabled={isAnalyzing || selectedChannels.length === 0}
+                  className={`px-12 py-4 rounded-xl font-semibold text-lg transition-all duration-300 transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-offset-2 focus:ring-offset-[var(--dark-bg)] ${
+                    isAnalyzing || selectedChannels.length === 0
+                      ? 'bg-gray-600 text-gray-400 cursor-not-allowed shadow-none'
+                      : 'bg-gradient-to-r from-[var(--gold)] to-yellow-400 text-[var(--navy)] shadow-lg hover:shadow-xl focus:ring-[var(--gold)] hover:from-yellow-400 hover:to-[var(--gold)]'
+                  }`}
+                >
+                  {isAnalyzing
+                    ? (
+                      <span className="flex items-center space-x-2">
+                        <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <span>Analyzing...</span>
+                      </span>
+                    )
+                    : selectedChannels.length === 0
+                      ? 'Select Channels to Analyze'
+                      : (
+                        <span className="flex items-center space-x-2">
+                          <span>Start Analysis</span>
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+                          </svg>
+                        </span>
+                      )
+                  }
+                </button>
+              </div>
+
+              {selectedChannels.length === 0 && (
+                <div className="text-center text-red-400 text-sm mt-2">
+                  ⚠️ Please select at least one channel to perform analysis
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Step 6: Results */}
+          {currentStep === 'results' && (
+            <div className="space-y-6">
+              <h2 className="text-2xl font-bold text-[var(--dark-text)]">Step 6: Results</h2>
+              {console.log('🎯 Results section rendering. visualizationResults:', visualizationResults)}
+              
+              {(analysisResults.length > 0 || visualizationResults.length > 0) && (
+                <div className="grid gap-6">
+                  {/* Summary Cards */}
+                  <div className="grid md:grid-cols-3 gap-4">
+                    <div className="bg-[var(--dark-card)] border border-[var(--dark-border)] rounded-lg p-4">
+                      <div className="text-2xl font-bold text-[var(--gold)]">
+                        {analysisResults.length > 0 ? analysisResults.length : (visualizationResults.length > 0 ? (visualizationResults[0]?.summary?.total_experiments || session?.experiments.length || 1) : 0)}
+                      </div>
+                      <div className="text-sm text-[var(--dark-text-secondary)]">Experiments Analyzed</div>
+                    </div>
+                    <div className="bg-[var(--dark-card)] border border-[var(--dark-border)] rounded-lg p-4">
+                      <div className="text-2xl font-bold text-[var(--gold)]">
+                        {analysisResults.length > 0 ? analysisResults.reduce((sum, r) => sum + r.stimulation_periods, 0) : (visualizationResults.length > 0 ? (visualizationResults[0]?.summary?.total_periods || 0) : 0)}
+                      </div>
+                      <div className="text-sm text-[var(--dark-text-secondary)]">Total Periods</div>
+                    </div>
+                    <div className="bg-[var(--dark-card)] border border-[var(--dark-border)] rounded-lg p-4">
+                      <div className="text-2xl font-bold text-[var(--gold)]">
+                        {rawEdfData?.n_channels || 8}
+                      </div>
+                      <div className="text-sm text-[var(--dark-text-secondary)]">Channels</div>
+                    </div>
+                  </div>
+
+                  {/* Detailed Results */}
+                  <div className="bg-[var(--dark-card)] border border-[var(--dark-border)] rounded-lg p-6">
+                    <h3 className="text-lg font-semibold text-[var(--dark-text)] mb-4">Analysis Results</h3>
+                    <div className="space-y-4">
+                      {analysisResults.map((result, idx) => (
+                        <div key={idx} className="bg-[var(--dark-bg-secondary)] border border-[var(--dark-border)] rounded p-4">
+                          <div className="flex justify-between items-start mb-3">
+                            <h4 className="font-medium text-[var(--dark-text)]">{result.experiment_name}</h4>
+                            <span className="text-sm text-[var(--dark-text-secondary)]">
+                              {result.stimulation_periods} periods
+                            </span>
+                          </div>
+                          
+                          <div className="grid md:grid-cols-1 gap-4">
+                            <div>
+                              <div className="text-xs text-[var(--dark-text-secondary)]">40 Hz SNR</div>
+                              <div className="text-lg font-bold text-[var(--gold)]">
+                                {result.summary?.mean_snr_40hz?.toFixed(2) || 'N/A'} dB
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Visualizations */}
+                  {visualizationResults.map((viz, idx) => (
+                    <div key={idx} className="space-y-6">
+                      {/* Experiment-wise Plots */}
+                      {viz.plot_base64 && (
+                        <div className="bg-[var(--dark-card)] border border-[var(--dark-border)] rounded-lg p-6">
+                          <h3 className="text-lg font-semibold text-[var(--dark-text)] mb-4">Experiment-wise Analysis</h3>
+                          <div className="text-center">
+                            <img
+                              src={`data:image/png;base64,${viz.plot_base64}`}
+                              alt="SSVEP Experiment Analysis Results"
+                              className="max-w-full h-auto mx-auto border border-[var(--dark-border)] rounded"
+                            />
+                          </div>
+                          <div className="mt-4 grid md:grid-cols-3 gap-4 text-center">
+                            <div>
+                              <div className="text-lg font-bold text-[var(--gold)]">
+                                {viz.summary.total_experiments}
+                              </div>
+                              <div className="text-xs text-[var(--dark-text-secondary)]">Experiments</div>
+                            </div>
+                            <div>
+                              <div className="text-lg font-bold text-[var(--gold)]">
+                                {viz.summary.total_periods}
+                              </div>
+                              <div className="text-xs text-[var(--dark-text-secondary)]">Total Periods</div>
+                            </div>
+                            <div>
+                              <div className="text-lg font-bold text-[var(--gold)]">
+                                {viz.summary.avg_snr.toFixed(2)} dB
+                              </div>
+                              <div className="text-xs text-[var(--dark-text-secondary)]">Average SNR</div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Summary Plots */}
+                      {viz.summary_plot_base64 && (
+                        <div className="bg-[var(--dark-card)] border border-[var(--dark-border)] rounded-lg p-6">
+                          <h3 className="text-lg font-semibold text-[var(--dark-text)] mb-4">Summary Analysis</h3>
+                          <div className="text-center">
+                            <img
+                              src={`data:image/png;base64,${viz.summary_plot_base64}`}
+                              alt="SSVEP Summary Analysis Results"
+                              className="max-w-full h-auto mx-auto border border-[var(--dark-border)] rounded"
+                            />
+                          </div>
+                          <div className="mt-4 text-sm text-[var(--dark-text-secondary)] text-center">
+                            Summary plots analyzing data across all experiments
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  
+                  {/* Export Options */}
+                  <div className="bg-[var(--dark-card)] border border-[var(--dark-border)] rounded-lg p-6">
+                    <h3 className="text-lg font-semibold text-[var(--dark-text)] mb-4">Export Results</h3>
+                    <div className="flex flex-wrap gap-4">
+                      <button 
+                        onClick={exportCSV}
+                        className="bg-[var(--gold)] text-[var(--navy)] px-4 py-2 rounded-lg font-medium hover:bg-yellow-400 transition-colors"
+                      >
+                        📊 Download CSV
+                      </button>
+                      <button 
+                        onClick={downloadPlots}
+                        className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 transition-colors"
+                      >
+                        📈 Download Plots
+                      </button>
+                      <button
+                        onClick={generateReport}
+                        className="bg-green-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-green-700 transition-colors"
+                      >
+                        📄 Generate PDF Report
+                      </button>
+                      <button 
+                        onClick={() => {
+                          setCurrentStep('upload');
+                          setSession(null);
+                          setEdfFile(null);
+                          setCsvFile(null);
+                          setAnalysisResults([]);
+                          setVisualizationResults([]);
+                          setRawEdfData(null);
+                        }}
+                        className="bg-gray-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-gray-700 transition-colors"
+                      >
+                        🔄 New Analysis
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Sync Modal */}
+      {showSyncModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-[var(--dark-card)] border border-[var(--dark-border)] rounded-xl p-8 max-w-md w-full mx-4">
+            <h3 className="text-xl font-bold text-[var(--dark-text)] mb-4">Manual Synchronization</h3>
+            <p className="text-[var(--dark-text-secondary)] mb-4">
+              Enter the time offset in seconds. This value will be added to all annotation timestamps.
+            </p>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-[var(--dark-text)] mb-2">
+                  Sync Offset (seconds)
+                </label>
+                <input
+                  type="number"
+                  step="0.1"
+                  placeholder="e.g., 10.5"
+                  onChange={(e) => setSyncTimestamp(parseFloat(e.target.value) || 0)}
+                  className="w-full px-3 py-2 bg-[var(--dark-bg)] border border-[var(--dark-border)] rounded text-[var(--dark-text)]"
+                />
+                <div className="text-xs text-[var(--dark-text-secondary)] mt-1">
+                  Positive values shift annotations forward in time
+                </div>
+              </div>
+              <div className="flex space-x-4">
+                <button
+                  onClick={() => syncTimestamp !== null && applySynchronization(syncTimestamp)}
+                  disabled={syncTimestamp === null}
+                  className="flex-1 bg-[var(--gold)] text-[var(--navy)] py-2 rounded-lg font-medium hover:bg-yellow-400 transition-colors disabled:opacity-50"
+                >
+                  Apply
+                </button>
+                <button
+                  onClick={() => {
+                    setShowSyncModal(false);
+                    setSyncTimestamp(null);
+                  }}
+                  className="flex-1 bg-gray-600 text-white py-2 rounded-lg font-medium hover:bg-gray-700 transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

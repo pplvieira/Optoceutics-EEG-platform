@@ -1,0 +1,13 @@
+experiment,start_time,duration,label
+Exp1,10.0,5.0,15Hz_stim
+Exp1,20.0,5.0,15Hz_stim
+Exp1,30.0,5.0,15Hz_stim
+Exp2,45.0,5.0,20Hz_stim
+Exp2,55.0,5.0,20Hz_stim
+Exp2,65.0,5.0,20Hz_stim
+Exp3,80.0,5.0,25Hz_stim
+Exp3,90.0,5.0,25Hz_stim
+Exp3,100.0,5.0,25Hz_stim
+Exp4,115.0,5.0,30Hz_stim
+Exp4,125.0,5.0,30Hz_stim
+Exp4,135.0,5.0,30Hz_stim

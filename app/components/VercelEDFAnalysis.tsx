@@ -125,7 +125,7 @@ export default function VercelEDFAnalysis({ file, isDarkMode = false }: VercelED
           </p>
           <input
             type="file"
-            accept=".edf,.bdf"
+            accept=".edf,.bdf,.fif"
             onChange={(e) => {
               const file = e.target.files?.[0];
               if (file) handleFileUpload(file);

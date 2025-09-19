@@ -82,7 +82,7 @@ async def upload_edf_file(file: UploadFile = File(...)):
     
     print(f"Received upload request for file: {file.filename}")
     
-    if not file.filename or not file.filename.lower().endswith(('.edf', '.bdf')):
+    if not file.filename or not file.filename.lower().endswith(('.edf', '.bdf', '.fif')):
         raise HTTPException(status_code=400, detail="Only EDF/BDF files are supported")
     
     # Generate unique file ID

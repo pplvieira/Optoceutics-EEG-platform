@@ -80,7 +80,11 @@ class VolatileExperimentDatabase {
       'Stimulus_Type',
       'Response',
       'Reaction_Time_ms',
-      'Stimulus_Value'
+      'Stimulus_Value',
+      'Questionnaire_Score',
+      'Questionnaire_Interpretation',
+      'Valid_Responses',
+      'Total_Questions'
     ];
 
     let csvContent = headers.join(',') + '\n';
@@ -97,8 +101,16 @@ class VolatileExperimentDatabase {
         exp.completionStatus
       ];
 
+      // Extract questionnaire-specific data if available
+      const isQuestionnaire = exp.experimentType === 'Questionnaire';
+      const questionnaireScore = isQuestionnaire && exp.rawData ? (exp.rawData.score || '') : '';
+      const questionnaireInterpretation = isQuestionnaire && exp.rawData ? (exp.rawData.interpretation || '') : '';
+      const validResponses = isQuestionnaire && exp.rawData ? (exp.rawData.validResponses || '') : '';
+      const totalQuestions = isQuestionnaire && exp.rawData ? (exp.rawData.totalQuestions || '') : '';
+
       if (exp.annotations.length === 0) {
-        csvContent += baseRow.join(',') + ',,,,,\n';
+        csvContent += baseRow.join(',') + ',,,,,' + 
+                     [questionnaireScore, questionnaireInterpretation, validResponses, totalQuestions].join(',') + '\n';
       } else {
         exp.annotations.forEach((annotation, index) => {
           const row = [
@@ -108,7 +120,12 @@ class VolatileExperimentDatabase {
             annotation.stimulusType,
             annotation.response || '',
             annotation.reactionTime?.toString() || '',
-            annotation.stimulusValue || ''
+            annotation.stimulusValue || '',
+            // Only include questionnaire data on first row to avoid repetition
+            index === 0 ? questionnaireScore : '',
+            index === 0 ? questionnaireInterpretation : '',
+            index === 0 ? validResponses : '',
+            index === 0 ? totalQuestions : ''
           ];
           csvContent += row.join(',') + '\n';
         });

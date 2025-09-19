@@ -593,8 +593,13 @@ def read_edf_file(file_bytes, filename):
                     tmp_path = tmp_file.name
                 
                 try:
-                    print(f"Reading EDF file with MNE from: {tmp_path}")
-                    raw = mne.io.read_raw_edf(tmp_path, preload=True, verbose=False)
+                    try:
+                        print(f"Reading EDF file with MNE from: {tmp_path}")
+                        raw = mne.io.read_raw_edf(tmp_path, preload=True, verbose=False)
+                    except:
+                        print(f"[###] Didn't work. Reading EDF file with FIF from: {tmp_path}")
+                        print(f"Reading FIF file with MNE from: {tmp_path}")
+                        raw = mne.io.read_raw_fif(tmp_path, preload=True, verbose=False)
                     
                     print(f"MNE successfully loaded: {len(raw.ch_names)} channels, {raw.info['sfreq']} Hz")
                     
@@ -2252,14 +2257,18 @@ export_modified_edf()
   const handleDragEnter = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    setDragActive(true);
-  }, []);
+    if (pyodideReady) {
+      setDragActive(true);
+    }
+  }, [pyodideReady]);
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    setDragActive(false);
-  }, []);
+    if (pyodideReady) {
+      setDragActive(false);
+    }
+  }, [pyodideReady]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -2271,12 +2280,17 @@ export_modified_edf()
     e.stopPropagation();
     setDragActive(false);
 
+    if (!pyodideReady) {
+      setError('Python environment not ready. Please wait for initialization.');
+      return;
+    }
+
     const files = Array.from(e.dataTransfer.files);
     if (files.length > 0) {
       const file = files[0];
       handleFileSelect(file);
     }
-  }, []);
+  }, [pyodideReady]);
 
   // Progress simulation for better UX
   const simulateProgress = useCallback((duration: number) => {
@@ -2303,7 +2317,7 @@ export_modified_edf()
       return;
     }
 
-    if (!file.name.toLowerCase().endsWith('.edf') && !file.name.toLowerCase().endsWith('.bdf')) {
+    if (!file.name.toLowerCase().endsWith('.edf') && !file.name.toLowerCase().endsWith('.fif') && !file.name.toLowerCase().endsWith('.bdf')) {
       setError('Please select an EDF or BDF file');
       return;
     }
@@ -2767,16 +2781,18 @@ export_modified_edf()
                 onDragOver={handleDragOver}
                 onDrop={handleDrop}
                 className={`border-2 border-dashed rounded-lg p-4 text-center transition-all duration-200 ${
-                  dragActive 
-                    ? 'border-blue-500 bg-blue-50' 
-                    : 'border-gray-300 hover:border-gray-400'
+                  !pyodideReady
+                    ? 'border-gray-200 bg-gray-50 opacity-50 cursor-not-allowed'
+                    : dragActive 
+                      ? 'border-blue-500 bg-blue-50' 
+                      : 'border-gray-300 hover:border-gray-400 cursor-pointer'
                 }`}
               >
                 <input
                   type="file"
                   ref={fileInputRef}
                   onChange={handleFileInputChange}
-                  accept=".edf,.bdf"
+                  accept=".edf,.bdf,.fif"
                   className="hidden"
                   disabled={!pyodideReady}
                 />
@@ -2798,7 +2814,7 @@ export_modified_edf()
                     </button>
                     
                     <p className="text-sm text-gray-600 mt-1">
-                      {dragActive ? 'Drop your EDF file here!' : 'Or drag & drop your file here'}
+                      {dragActive ? 'Drop your EDF file here!' : pyodideReady ? 'Or drag & drop your file here' : 'Please wait for Python environment to load...'}
                     </p>
                     <p className="text-xs text-gray-400">
                       Local processing • No uploads • No limits
@@ -2835,7 +2851,7 @@ export_modified_edf()
                 type="file"
                 ref={fileInputRef}
                 onChange={handleFileInputChange}
-                accept=".edf,.bdf"
+                accept=".edf,.bdf,.fif"
                 className="hidden"
                 disabled={!pyodideReady}
               />

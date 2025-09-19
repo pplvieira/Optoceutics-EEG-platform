@@ -31,7 +31,7 @@ export default function VercelEDFUpload({ isDarkMode = false, onFileUploaded }: 
 
     const droppedFiles = Array.from(e.dataTransfer.files);
     const edfFiles = droppedFiles.filter(file => 
-      file.name.toLowerCase().endsWith('.edf') || file.name.toLowerCase().endsWith('.bdf')
+      file.name.toLowerCase().endsWith('.edf') || file.name.toLowerCase().endsWith('.bdf') || file.name.toLowerCase().endsWith('.fif')
     );
 
     if (edfFiles.length > 0) {
@@ -136,7 +136,7 @@ export default function VercelEDFUpload({ isDarkMode = false, onFileUploaded }: 
           ref={fileInputRef}
           type="file"
           multiple
-          accept=".edf,.bdf"
+          accept=".edf,.bdf,.fif"
           onChange={handleFileSelect}
           className="hidden"
         />
@@ -160,7 +160,7 @@ export default function VercelEDFUpload({ isDarkMode = false, onFileUploaded }: 
               <p className={`text-sm ${
                 isDarkMode ? 'text-[var(--dark-text-secondary)]' : 'text-gray-500'
               }`}>
-                Supports .edf and .bdf files (processed locally, not stored)
+                Supports .edf, .bdf and .fif files (processed locally, not stored)
               </p>
             </div>
           </div>

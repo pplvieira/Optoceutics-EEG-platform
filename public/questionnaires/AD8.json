@@ -1,0 +1,81 @@
+{
+    "questionnaire": {
+        "id": "AD8",
+        "name": "AD8 Dementia Screening Interview",
+        "description": "An informant-based screening tool for early dementia. Consists of 8 yes/no items measuring change in memory, problem-solving, and daily functioning.",
+        "num_items": 8,
+        "respondent": "Informant (family member, caregiver, or patient if no informant available)",
+        "instructions": "Has there been a change in the person compared to 10 years ago? Answer Yes, No, or N/A (Don't know).",
+        "scale": {
+            "type": "dichotomous",
+            "options": [
+                {
+                    "value": 1,
+                    "label": "Yes, a change"
+                },
+                {
+                    "value": 0,
+                    "label": "No, no change"
+                },
+                {
+                    "value": null,
+                    "label": "N/A or don't know"
+                }
+            ]
+        },
+        "questions": [
+            {
+                "id": "Q1",
+                "text": "Problems with judgment (e.g., bad financial decisions, problems with thinking)"
+            },
+            {
+                "id": "Q2",
+                "text": "Less interest in hobbies, activities, or usual tasks"
+            },
+            {
+                "id": "Q3",
+                "text": "Repeats the same things over and over (questions, stories, or statements)"
+            },
+            {
+                "id": "Q4",
+                "text": "Trouble learning how to use a tool, appliance, or gadget (e.g., VCR, computer, microwave, remote control)"
+            },
+            {
+                "id": "Q5",
+                "text": "Forgets the correct month or year"
+            },
+            {
+                "id": "Q6",
+                "text": "Trouble handling complicated financial affairs (e.g., balancing checkbook, income taxes, paying bills)"
+            },
+            {
+                "id": "Q7",
+                "text": "Trouble remembering appointments"
+            },
+            {
+                "id": "Q8",
+                "text": "Daily problems with thinking and/or memory"
+            }
+        ],
+        "scoring": {
+            "method": "sum",
+            "range": [
+                0,
+                8
+            ],
+            "rules": "Each 'Yes, a change' response counts as 1 point. 'No change' = 0. 'N/A' is excluded from scoring.",
+            "interpretation": [
+                {
+                    "min": 0,
+                    "max": 1,
+                    "label": "Normal cognition / no impairment likely"
+                },
+                {
+                    "min": 2,
+                    "max": 8,
+                    "label": "Cognitive impairment likely — further evaluation recommended"
+                }
+            ]
+        }
+    }
+}
