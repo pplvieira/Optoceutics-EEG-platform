@@ -52,6 +52,8 @@ export default function EDFViewerTool() {
   const [error, setError] = useState<string | null>(null);
   const [pyodideReady, setPyodideReady] = useState(false);
   const [generatingPDF, setGeneratingPDF] = useState(false);
+  const [generatingPSD, setGeneratingPSD] = useState(false);
+  const [psdPlots, setPsdPlots] = useState<{ [channelName: string]: string }>({});
   const [viewportStart, setViewportStart] = useState(0);
   const [viewportDuration, setViewportDuration] = useState(30); // Show 30 seconds by default
 
@@ -86,7 +88,7 @@ export default function EDFViewerTool() {
       });
 
       // Install required packages
-      await pyodide.loadPackage(['numpy', 'micropip']);
+      await pyodide.loadPackage(['numpy', 'micropip', 'matplotlib', 'scipy']);
       const micropip = pyodide.pyimport('micropip');
       await micropip.install('reportlab');
 
@@ -488,6 +490,124 @@ export default function EDFViewerTool() {
     setViewportStart(prev => Math.min(metadata.duration - viewportDuration, prev + viewportDuration / 4));
   };
 
+  const generatePSDPlots = async () => {
+    if (!pyodideReady || !signalData || !metadata) {
+      setError('Cannot generate PSD: Python environment not ready or no signal data loaded');
+      return;
+    }
+
+    setGeneratingPSD(true);
+    setError(null);
+
+    try {
+      const pyodide = pyodideWorkerRef.current;
+      if (!pyodide) {
+        throw new Error('Pyodide is not initialized');
+      }
+
+      // Generate PSD plots for each selected channel
+      const psdPlotsMap: { [channelName: string]: string } = {};
+
+      for (const channelName of selectedChannels) {
+        const channelSignal = signalData.channels[channelName];
+        if (!channelSignal) continue;
+
+        // Prepare Python code for PSD generation
+        const pythonCode = `
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
+import matplotlib.pyplot as plt
+from scipy import signal as scipy_signal
+import io
+import base64
+
+# Signal data
+signal_data = ${JSON.stringify(channelSignal)}
+sampling_rate = ${metadata.samplingRate}
+channel_name = "${channelName}"
+
+# Convert to numpy array
+signal_array = np.array(signal_data)
+
+# Compute Power Spectral Density using Welch's method
+frequencies, psd = scipy_signal.welch(
+    signal_array,
+    fs=sampling_rate,
+    nperseg=min(256, len(signal_array)),
+    scaling='density'
+)
+
+# Create figure
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), facecolor='#1a1a1a')
+
+# Plot 1: PSD in log scale
+ax1.semilogy(frequencies, psd, color='#00ff88', linewidth=1.5)
+ax1.set_xlabel('Frequency (Hz)', color='white', fontsize=12)
+ax1.set_ylabel('PSD (V²/Hz)', color='white', fontsize=12)
+ax1.set_title(f'Power Spectral Density - {channel_name}', color='white', fontsize=14, fontweight='bold')
+ax1.grid(True, alpha=0.3, color='gray')
+ax1.set_facecolor('#1a1a1a')
+ax1.tick_params(colors='white')
+ax1.spines['bottom'].set_color('white')
+ax1.spines['top'].set_color('white')
+ax1.spines['left'].set_color('white')
+ax1.spines['right'].set_color('white')
+
+# Plot 2: PSD in linear scale (zoomed to 0-50 Hz)
+freq_mask = frequencies <= 50
+ax2.plot(frequencies[freq_mask], psd[freq_mask], color='#3b82f6', linewidth=1.5)
+ax2.set_xlabel('Frequency (Hz)', color='white', fontsize=12)
+ax2.set_ylabel('PSD (V²/Hz)', color='white', fontsize=12)
+ax2.set_title(f'PSD (0-50 Hz) - {channel_name}', color='white', fontsize=14, fontweight='bold')
+ax2.grid(True, alpha=0.3, color='gray')
+ax2.set_facecolor('#1a1a1a')
+ax2.tick_params(colors='white')
+ax2.spines['bottom'].set_color('white')
+ax2.spines['top'].set_color('white')
+ax2.spines['left'].set_color('white')
+ax2.spines['right'].set_color('white')
+
+# Add frequency band annotations
+bands = [
+    ('Delta', 0.5, 4, '#ff6b6b'),
+    ('Theta', 4, 8, '#4ecdc4'),
+    ('Alpha', 8, 13, '#45b7d1'),
+    ('Beta', 13, 30, '#96ceb4'),
+    ('Gamma', 30, 50, '#ffeaa7')
+]
+
+for band_name, low, high, color in bands:
+    ax2.axvspan(low, high, alpha=0.2, color=color, label=band_name)
+
+ax2.legend(loc='upper right', framealpha=0.8, facecolor='#2a2a2a', edgecolor='white', labelcolor='white')
+
+plt.tight_layout()
+
+# Save to base64
+buffer = io.BytesIO()
+plt.savefig(buffer, format='png', dpi=100, facecolor='#1a1a1a', edgecolor='none')
+buffer.seek(0)
+img_base64 = base64.b64encode(buffer.read()).decode('utf-8')
+plt.close()
+
+img_base64
+`;
+
+        const result = await pyodide.runPythonAsync(pythonCode);
+        psdPlotsMap[channelName] = result;
+      }
+
+      setPsdPlots(psdPlotsMap);
+      setError(null);
+    } catch (err) {
+      console.error('Error generating PSD plots:', err);
+      setError('Failed to generate PSD plots. Please try again.');
+    } finally {
+      setGeneratingPSD(false);
+    }
+  };
+
   const generatePDFReport = async () => {
     if (!pyodideReady || !metadata || !file) {
       setError('Cannot generate PDF: Python environment not ready or no file loaded');
@@ -512,7 +632,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from datetime import datetime
 
-def generate_edf_report(metadata, time_selection, annotations):
+def generate_edf_report(metadata, time_selection, annotations, psd_plots=None):
     """Generate a comprehensive EDF analysis report"""
 
     buffer = io.BytesIO()
@@ -692,6 +812,25 @@ def generate_edf_report(metadata, time_selection, annotations):
     summary_para = Paragraph(summary_text, styles['Normal'])
     story.append(summary_para)
 
+    # PSD Plots
+    if psd_plots and len(psd_plots) > 0:
+        story.append(PageBreak())
+        story.append(Paragraph("Power Spectral Density Analysis", heading_style))
+
+        for channel_name, plot_base64 in psd_plots.items():
+            story.append(Paragraph(f"Channel: {channel_name}", styles['Heading3']))
+            story.append(Spacer(1, 0.2*inch))
+
+            # Decode base64 image
+            import base64 as b64
+            img_data = b64.b64decode(plot_base64)
+            img_buffer = io.BytesIO(img_data)
+
+            # Add image to PDF
+            img = Image(img_buffer, width=6*inch, height=4.8*inch)
+            story.append(img)
+            story.append(Spacer(1, 0.3*inch))
+
     # Build PDF
     doc.build(story)
 
@@ -705,8 +844,9 @@ def generate_edf_report(metadata, time_selection, annotations):
 metadata_dict = ${JSON.stringify(metadata)}
 time_selection_dict = ${timeSelection ? JSON.stringify(timeSelection) : 'None'}
 annotations_list = ${JSON.stringify(annotations)}
+psd_plots = ${JSON.stringify(psdPlots)}
 
-pdf_bytes = generate_edf_report(metadata_dict, time_selection_dict, annotations_list)
+pdf_bytes = generate_edf_report(metadata_dict, time_selection_dict, annotations_list, psd_plots)
 pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
 pdf_base64
 `;
@@ -945,6 +1085,40 @@ pdf_base64
                 className="w-full border border-gray-700 rounded cursor-crosshair"
                 onClick={handleCanvasClick}
               />
+            </div>
+
+            {/* PSD Analysis Section */}
+            <div className="bg-gray-800 rounded-lg p-6">
+              <h3 className="text-xl font-bold mb-4">Power Spectral Density Analysis</h3>
+              <p className="text-sm text-gray-400 mb-4">
+                Generate frequency domain analysis using Welch&apos;s method. PSD plots show the distribution of signal power across frequencies, with annotations for standard EEG frequency bands (Delta, Theta, Alpha, Beta, Gamma).
+              </p>
+              <button
+                onClick={generatePSDPlots}
+                disabled={generatingPSD || !pyodideReady || !signalData || selectedChannels.length === 0}
+                className="px-6 py-3 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 rounded-lg font-medium flex items-center transition-colors"
+              >
+                <span className="mr-2 text-xl">📊</span>
+                {generatingPSD ? 'Generating PSD Plots...' : 'Generate PSD Plots'}
+              </button>
+
+              {/* Display PSD Plots */}
+              {Object.keys(psdPlots).length > 0 && (
+                <div className="mt-6 space-y-4">
+                  <h4 className="text-lg font-semibold">PSD Results:</h4>
+                  {Object.entries(psdPlots).map(([channelName, base64Image]) => (
+                    <div key={channelName} className="border border-gray-700 rounded-lg p-4">
+                      <h5 className="text-md font-medium mb-2">{channelName}</h5>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={`data:image/png;base64,${base64Image}`}
+                        alt={`PSD for ${channelName}`}
+                        className="w-full rounded"
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Actions */}
