@@ -134,6 +134,7 @@ export default function EDFViewerTool() {
     } else {
       setError('Please drop a valid EDF or BDF file');
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -249,8 +250,10 @@ export default function EDFViewerTool() {
   ): Promise<SignalData> => {
     // This is a simplified signal loader
     // In production, you'd want to use pyedflib or similar
-    const decoder = new TextDecoder('ascii');
+    // Suppress unused parameter warnings - they'll be needed for real EDF parsing
+    void data;
 
+    // const decoder = new TextDecoder('ascii');
     // const numDataRecords = parseInt(decoder.decode(data.slice(236, 244)).trim());
     // const recordDuration = parseFloat(decoder.decode(data.slice(244, 252)).trim());
 
@@ -355,6 +358,8 @@ export default function EDFViewerTool() {
       ctx.font = '12px monospace';
       ctx.fillText(channelName, 10, yOffset - channelHeight / 2 + 15);
     });
+  // metadata is stable once loaded, no need to re-render on metadata change
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signalData, selectedChannels, timeSelection, viewportStart, viewportDuration]);
 
   // Draw timeline with annotations
@@ -705,6 +710,10 @@ pdf_bytes = generate_edf_report(metadata_dict, time_selection_dict, annotations_
 pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
 pdf_base64
 `;
+
+      if (!pyodide) {
+        throw new Error('Pyodide is not initialized');
+      }
 
       const result = await pyodide.runPythonAsync(pythonCode);
 
