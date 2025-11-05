@@ -24355,3 +24355,6 @@ python-backend/edf-env/Scripts/uvicorn.exe
 python-backend/edf-env/Scripts/watchfiles.exe
 python-backend/edf-env/Scripts/websockets.exe
 python-backend/edf-env/share/man/man1/ttx.1
+
+# Build logs
+build*.log

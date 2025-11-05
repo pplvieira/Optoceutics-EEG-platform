@@ -5,6 +5,7 @@ import Image from 'next/image';
 import ComprehensiveEDFDashboard from './components/ComprehensiveEDFDashboard';
 import PyodideEDFProcessor from './components/PyodideEDFProcessor';
 import SSVEPAnalysisTool from './components/SSVEPAnalysisTool';
+import EDFViewerTool from './components/EDFViewerTool';
 import VercelEDFUpload from './components/VercelEDFUpload';
 import VercelEDFAnalysis from './components/VercelEDFAnalysis';
 import P300Experiment from './components/P300Experiment';
@@ -13,7 +14,7 @@ import QuestionnaireSystem from './components/QuestionnaireSystem';
 import { EDFFile } from './types/edf';
 import { experimentDB, ExperimentResult } from './utils/experimentDatabase';
 
-type DesktopMode = 'developer' | 'experiment' | 'ssvep' | 'browser';
+type DesktopMode = 'developer' | 'experiment' | 'ssvep' | 'browser' | 'edf-viewer';
 
 const DeveloperTabs = [
   'Data Collection',
@@ -70,6 +71,19 @@ export default function Home() {
             
             {/* Mode Toggle */}
             <div className="bg-blue-800 rounded-lg p-1 flex">
+              <button
+                onClick={() => {
+                  setCurrentMode('edf-viewer');
+                  setActiveTab(0);
+                }}
+                className={`px-3 py-2 rounded-md font-medium transition-all text-sm ${
+                  currentMode === 'edf-viewer'
+                    ? 'bg-[var(--gold)] text-[var(--navy)] shadow-lg'
+                    : 'text-blue-200 hover:text-white hover:bg-blue-700'
+                }`}
+              >
+                EDF Viewer
+              </button>
               <button
                 onClick={() => {
                   setCurrentMode('browser');
@@ -132,24 +146,27 @@ export default function Home() {
         {/* Mode Description */}
         <div className="mb-8 text-center">
           <h2 className={`text-3xl font-bold mb-4 ${
-            currentMode === 'developer' || currentMode === 'ssvep' || currentMode === 'browser'
-              ? 'text-[var(--dark-text)]' 
+            currentMode === 'developer' || currentMode === 'ssvep' || currentMode === 'browser' || currentMode === 'edf-viewer'
+              ? 'text-[var(--dark-text)]'
               : 'text-[var(--navy)]'
           }`}>
-            {currentMode === 'browser' ? 'Browser-Based Python Processing' :
-             currentMode === 'developer' ? 'Technical Dashboard' : 
+            {currentMode === 'edf-viewer' ? 'EDF Viewer & Report Generator' :
+             currentMode === 'browser' ? 'Browser-Based Python Processing' :
+             currentMode === 'developer' ? 'Technical Dashboard' :
              currentMode === 'ssvep' ? 'SSVEP Detection Tool' : 'Participant Interface'}
           </h2>
           <p className={`max-w-3xl mx-auto ${
-            currentMode === 'developer' || currentMode === 'ssvep' || currentMode === 'browser'
-              ? 'text-[var(--dark-text-secondary)]' 
+            currentMode === 'developer' || currentMode === 'ssvep' || currentMode === 'browser' || currentMode === 'edf-viewer'
+              ? 'text-[var(--dark-text-secondary)]'
               : 'text-gray-600'
           }`}>
-            {currentMode === 'browser'
+            {currentMode === 'edf-viewer'
+              ? 'Drag and drop EDF files to visualize EEG data and annotations. Select specific time ranges for stimulation data analysis and generate professional PDF reports with predetermined layouts.'
+              : currentMode === 'browser'
               ? 'Full Python-powered EEG analysis running entirely in your browser using WebAssembly. No server required, no file uploads, no size limits. Complete privacy with pyedflib, NumPy, SciPy, and scikit-learn.'
-              : currentMode === 'developer' 
+              : currentMode === 'developer'
               ? 'Comprehensive tools for EEG data collection, analysis, and visualization. Configure experiments, process signals, and generate insights.'
-              : currentMode === 'ssvep' 
+              : currentMode === 'ssvep'
               ? 'Automated SSVEP analysis and detection tool. Upload EDF files and CSV annotations to extract, synchronize, and analyze stimulation periods with power spectral density, SNR calculations, and comprehensive reporting.'
               : 'Welcome to your experiment session. Follow the guided tasks and interact with the activities designed to capture neural responses.'
             }
@@ -157,18 +174,23 @@ export default function Home() {
         </div>
 
         {/* Desktop Interface */}
+        {/* EDF Viewer Mode */}
+        {currentMode === 'edf-viewer' && (
+          <EDFViewerTool />
+        )}
+
         {/* Browser Python Mode */}
         {currentMode === 'browser' && (
           <PyodideEDFProcessor />
         )}
-        
+
         {/* SSVEP Tool Mode */}
         {currentMode === 'ssvep' && (
           <SSVEPAnalysisTool />
         )}
-        
+
         {/* Other Modes */}
-        {currentMode !== 'ssvep' && currentMode !== 'browser' && (
+        {currentMode !== 'ssvep' && currentMode !== 'browser' && currentMode !== 'edf-viewer' && (
         <div className={`rounded-2xl shadow-xl border overflow-hidden transition-colors duration-300 ${
           currentMode === 'developer' 
             ? 'bg-[var(--dark-card)] border-[var(--dark-border)]' 
