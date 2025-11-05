@@ -76,11 +76,8 @@ export default function Home() {
                   setCurrentMode('edf-viewer');
                   setActiveTab(0);
                 }}
-                className={`px-3 py-2 rounded-md font-medium transition-all text-sm ${
-                  currentMode === 'edf-viewer'
-                    ? 'bg-[var(--gold)] text-[var(--navy)] shadow-lg'
-                    : 'text-blue-200 hover:text-white hover:bg-blue-700'
-                }`}
+                disabled
+                className="px-3 py-2 rounded-md font-medium transition-all text-sm line-through opacity-50 cursor-not-allowed text-blue-300"
               >
                 EDF Viewer
               </button>
