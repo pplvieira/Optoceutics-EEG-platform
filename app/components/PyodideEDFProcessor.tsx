@@ -3,7 +3,7 @@
 /* eslint-disable @next/next/no-img-element */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { generatePatientReportPDF, downloadPDF, PatientReportData } from '../services/pdfExporter';
+import { generatePatientReportPDF, generatePatientReportDOCX, downloadPDF, downloadDOCX, PatientReportData } from '../services/pdfExporter';
 
 // Pyodide types
 declare global {
@@ -2549,16 +2549,69 @@ export_modified_edf()
     });
   };
 
-  const generatePatientReport = async () => {
-    if (!pyodideReady || !metadata || !currentFile) {
-      setError('Cannot generate report: File not loaded or Python environment not ready');
-      return;
+  const prepareReportData = (): PatientReportData | null => {
+    if (!metadata || !currentFile) {
+      return null;
     }
 
     // Find the most recent PSD analysis result
     const psdResult = analysisResults.find(r => r.analysis_type === 'psd');
 
     if (!psdResult) {
+      return null;
+    }
+
+    return {
+      // Patient information (can be extended to accept user input)
+      patientName: 'Patient Name', // TODO: Add input fields for this
+      patientId: metadata.subject_id || 'N/A',
+      examDate: new Date().toISOString().split('T')[0],
+
+      // File information
+      fileName: currentFile.name,
+      recordingDate: metadata.start_date && metadata.start_time
+        ? `${metadata.start_date} ${metadata.start_time}`
+        : 'N/A',
+      duration: metadata.duration_seconds,
+      samplingRate: metadata.sampling_frequency,
+      numChannels: metadata.num_channels,
+      channelNames: metadata.channel_names,
+
+      // Analysis parameters
+      selectedChannels: selectedChannels,
+      timeFrame: psdResult.time_frame ? {
+        start: psdResult.time_frame.start,
+        end: psdResult.time_frame.end,
+        start_real_time: psdResult.time_frame.start_real_time,
+        end_real_time: psdResult.time_frame.end_real_time,
+      } : undefined,
+
+      // PSD analysis results
+      psdMethod: psdResult.parameters?.method || 'welch',
+      frequencyRange: {
+        min: psdResult.parameters?.fmin || 0.5,
+        max: psdResult.parameters?.fmax || 50,
+      },
+      psdPlotBase64: psdResult.plot_base64, // The base64 encoded plot
+
+      // Annotations
+      annotations: annotations.map(ann => ({
+        time: ann.onset,
+        type: 'event',
+        description: ann.description || 'N/A',
+      })),
+    };
+  };
+
+  const generatePatientReport = async () => {
+    if (!pyodideReady || !metadata || !currentFile) {
+      setError('Cannot generate report: File not loaded or Python environment not ready');
+      return;
+    }
+
+    const reportData = prepareReportData();
+
+    if (!reportData) {
       setError('Please run PSD analysis first before generating the report');
       return;
     }
@@ -2568,48 +2621,6 @@ export_modified_edf()
     setLoadingMessage('Generating patient report PDF...');
 
     try {
-      // Prepare report data
-      const reportData: PatientReportData = {
-        // Patient information (can be extended to accept user input)
-        patientName: 'Patient Name', // TODO: Add input fields for this
-        patientId: metadata.subject_id || 'N/A',
-        examDate: new Date().toISOString().split('T')[0],
-
-        // File information
-        fileName: currentFile.name,
-        recordingDate: metadata.start_date && metadata.start_time
-          ? `${metadata.start_date} ${metadata.start_time}`
-          : 'N/A',
-        duration: metadata.duration_seconds,
-        samplingRate: metadata.sampling_frequency,
-        numChannels: metadata.num_channels,
-        channelNames: metadata.channel_names,
-
-        // Analysis parameters
-        selectedChannels: selectedChannels,
-        timeFrame: psdResult.time_frame ? {
-          start: psdResult.time_frame.start,
-          end: psdResult.time_frame.end,
-          start_real_time: psdResult.time_frame.start_real_time,
-          end_real_time: psdResult.time_frame.end_real_time,
-        } : undefined,
-
-        // PSD analysis results
-        psdMethod: psdResult.parameters?.method || 'welch',
-        frequencyRange: {
-          min: psdResult.parameters?.fmin || 0.5,
-          max: psdResult.parameters?.fmax || 50,
-        },
-        psdPlotBase64: psdResult.plot_base64, // The base64 encoded plot
-
-        // Annotations
-        annotations: annotations.map(ann => ({
-          time: ann.onset,
-          type: 'event',
-          description: ann.description || 'N/A',
-        })),
-      };
-
       // Generate PDF using Pyodide
       const pdfBase64 = await generatePatientReportPDF(pyodideRef.current, reportData);
 
@@ -2617,11 +2628,47 @@ export_modified_edf()
       const filename = `EEG_Report_${reportData.patientId}_${new Date().toISOString().split('T')[0]}.pdf`;
       downloadPDF(pdfBase64, filename);
 
-      setSuccess('Patient report generated successfully!');
+      setSuccess('Patient report PDF generated successfully!');
 
     } catch (error) {
       console.error('Report generation error:', error);
-      setError(`Failed to generate report: ${error}`);
+      setError(`Failed to generate PDF report: ${error}`);
+    } finally {
+      setGeneratingPDF(false);
+      setLoadingMessage('');
+    }
+  };
+
+  const generatePatientReportDOCXFile = async () => {
+    if (!pyodideReady || !metadata || !currentFile) {
+      setError('Cannot generate report: File not loaded or Python environment not ready');
+      return;
+    }
+
+    const reportData = prepareReportData();
+
+    if (!reportData) {
+      setError('Please run PSD analysis first before generating the report');
+      return;
+    }
+
+    setGeneratingPDF(true);
+    clearMessages();
+    setLoadingMessage('Generating patient report DOCX...');
+
+    try {
+      // Generate DOCX using Pyodide
+      const docxBase64 = await generatePatientReportDOCX(pyodideRef.current, reportData);
+
+      // Download the DOCX
+      const filename = `EEG_Report_${reportData.patientId}_${new Date().toISOString().split('T')[0]}.docx`;
+      downloadDOCX(docxBase64, filename);
+
+      setSuccess('Patient report DOCX generated successfully! You can convert it to PDF locally for perfect formatting.');
+
+    } catch (error) {
+      console.error('Report generation error:', error);
+      setError(`Failed to generate DOCX report: ${error}`);
     } finally {
       setGeneratingPDF(false);
       setLoadingMessage('');
@@ -3955,23 +4002,47 @@ export_modified_edf()
                 <li>Analysis summary</li>
               </ul>
             </div>
-            <button
-              onClick={generatePatientReport}
-              disabled={generatingPDF || !pyodideReady}
-              className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white py-3 px-6 rounded-lg text-base font-medium flex items-center justify-center transition-colors shadow-md hover:shadow-lg"
-            >
-              {generatingPDF ? (
-                <>
-                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
-                  Generating PDF Report...
-                </>
-              ) : (
-                <>
-                  <span className="text-2xl mr-2">📥</span>
-                  Generate Patient Report PDF
-                </>
-              )}
-            </button>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <button
+                onClick={generatePatientReportDOCXFile}
+                disabled={generatingPDF || !pyodideReady}
+                className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white py-3 px-6 rounded-lg text-base font-medium flex items-center justify-center transition-colors shadow-md hover:shadow-lg"
+              >
+                {generatingPDF ? (
+                  <>
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                    Generating DOCX...
+                  </>
+                ) : (
+                  <>
+                    <span className="text-2xl mr-2">📄</span>
+                    Download DOCX (Perfect Formatting)
+                  </>
+                )}
+              </button>
+              <button
+                onClick={generatePatientReport}
+                disabled={generatingPDF || !pyodideReady}
+                className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white py-3 px-6 rounded-lg text-base font-medium flex items-center justify-center transition-colors shadow-md hover:shadow-lg"
+              >
+                {generatingPDF ? (
+                  <>
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                    Generating PDF...
+                  </>
+                ) : (
+                  <>
+                    <span className="text-2xl mr-2">📥</span>
+                    Generate PDF Report
+                  </>
+                )}
+              </button>
+            </div>
+            <p className="text-sm text-gray-600 mt-3">
+              💡 <strong>Tip:</strong> Download DOCX for perfect formatting preservation (headers, footers, fonts).
+              You can convert it to PDF locally using Word or Google Docs.
+              The PDF option tries docx2pdf first, then falls back to reportlab if needed.
+            </p>
           </div>
         )}
 

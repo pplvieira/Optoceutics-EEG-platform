@@ -70,8 +70,8 @@ export async function generatePatientReportPDF(
   // Install required packages
   try {
     const micropip = pyodide.pyimport('micropip');
-    console.log('Installing python-docx, pillow, and reportlab...');
-    await micropip.install(['python-docx', 'pillow', 'reportlab']);
+    console.log('Installing python-docx, pillow, docx2pdf, and reportlab...');
+    await micropip.install(['python-docx', 'pillow', 'docx2pdf', 'reportlab']);
     console.log('Packages installed successfully');
   } catch (error) {
     console.error('Failed to install required libraries:', error);
@@ -127,9 +127,11 @@ def generate_patient_report_pdf():
     2. Creating an internal copy and editing it
     3. Replacing Date and Session Number placeholders
     4. Inserting the PSD plot image in the correct location
-    5. Converting the edited DOCX to PDF using reportlab
+    5. Converting to PDF using docx2pdf (preferred) or reportlab (fallback)
 
-    All original formatting, styles, fonts, headers, and footers are preserved.
+    Priority order for conversion:
+    1. docx2pdf - Best formatting preservation
+    2. reportlab - Fallback with acceptable formatting
 
     Returns:
         Base64 encoded PDF bytes
@@ -236,113 +238,158 @@ def generate_patient_report_pdf():
         doc.save(output_docx_buffer)
         output_docx_buffer.seek(0)
 
-        print("Step 6: Converting DOCX to PDF using reportlab...")
-        # Now convert the DOCX to PDF
-        # Since we're in Pyodide and don't have LibreOffice, we'll use reportlab
-        # to render the document by reading its content
+        print("Step 6: Converting DOCX to PDF...")
+        # Try conversion methods in order of preference
+        pdf_bytes = None
+        conversion_method = None
 
-        from reportlab.lib.pagesizes import A4, letter
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as RLImage, PageBreak
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.lib.units import inch
-        from reportlab.pdfgen import canvas as rl_canvas
-        from reportlab.lib import colors
+        # Method 1: Try docx2pdf (best formatting preservation)
+        try:
+            print("Trying docx2pdf conversion...")
+            from docx2pdf import convert
 
-        # Create PDF buffer
-        pdf_buffer = io.BytesIO()
+            # docx2pdf needs file paths in Pyodide, create temp files
+            import tempfile
+            import os
 
-        # Read the modified DOCX to extract content
-        output_docx_buffer.seek(0)
-        doc_for_pdf = Document(output_docx_buffer)
+            # Create temp directory
+            temp_dir = tempfile.mkdtemp()
+            docx_path = os.path.join(temp_dir, 'temp_report.docx')
+            pdf_path = os.path.join(temp_dir, 'temp_report.pdf')
 
-        # Create PDF document
-        pdf = SimpleDocTemplate(pdf_buffer, pagesize=A4,
-                              topMargin=0.75*inch, bottomMargin=0.75*inch,
-                              leftMargin=0.75*inch, rightMargin=0.75*inch)
+            # Write DOCX to temp file
+            with open(docx_path, 'wb') as f:
+                f.write(output_docx_buffer.getvalue())
 
-        # Container for PDF elements
-        story = []
-        styles = getSampleStyleSheet()
+            # Convert to PDF
+            convert(docx_path, pdf_path)
 
-        # Custom styles to match the template
-        title_style = ParagraphStyle(
-            'CustomTitle',
-            parent=styles['Heading1'],
-            fontSize=16,
-            textColor=colors.HexColor('#000000'),
-            spaceAfter=12,
-            alignment=0  # Left
-        )
+            # Read PDF back
+            with open(pdf_path, 'rb') as f:
+                pdf_bytes = f.read()
 
-        heading_style = ParagraphStyle(
-            'CustomHeading',
-            parent=styles['Heading2'],
-            fontSize=14,
-            textColor=colors.HexColor('#000000'),
-            spaceAfter=10,
-            spaceBefore=10,
-            fontName='Helvetica-Bold'
-        )
+            # Cleanup
+            os.remove(docx_path)
+            os.remove(pdf_path)
+            os.rmdir(temp_dir)
 
-        body_style = ParagraphStyle(
-            'CustomBody',
-            parent=styles['Normal'],
-            fontSize=11,
-            textColor=colors.HexColor('#000000'),
-            spaceAfter=6,
-            leading=14
-        )
+            conversion_method = "docx2pdf"
+            print("Successfully converted using docx2pdf!")
 
-        # Process each paragraph from the DOCX
-        for para in doc_for_pdf.paragraphs:
-            text = para.text.strip()
+        except Exception as e:
+            print(f"docx2pdf conversion failed: {e}")
+            print("Falling back to reportlab conversion...")
 
-            if not text:
-                story.append(Spacer(1, 0.1*inch))
-                continue
+            # Method 2: Fallback to reportlab
+            try:
+                from reportlab.lib.pagesizes import A4
+                from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as RLImage, PageBreak
+                from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+                from reportlab.lib.units import inch
+                from reportlab.lib import colors
 
-            # Determine style based on content and formatting
-            if 'Customer Report:' in text or 'Brain Response to 40 Hz' in text:
-                story.append(Paragraph(text, title_style))
-            elif any(heading in text for heading in ['Background Information:', 'Understanding the SSVEP',
-                                                      'Your Brain Response:', 'Interpretation:',
-                                                      'Additional Notes', 'Contact and Follow-Up']):
-                story.append(Paragraph(text, heading_style))
-            else:
-                # Check if it's a bullet point
-                if text.startswith('●') or text.startswith('•'):
-                    bullet_style = ParagraphStyle(
-                        'Bullet',
-                        parent=body_style,
-                        leftIndent=20,
-                        bulletIndent=10
-                    )
-                    story.append(Paragraph(text, bullet_style))
-                else:
-                    story.append(Paragraph(text, body_style))
+                # Create PDF buffer
+                pdf_buffer = io.BytesIO()
 
-        # Add images from the document
-        for rel in doc_for_pdf.part.rels.values():
-            if "image" in rel.target_ref:
-                try:
-                    image_data = rel.target_part.blob
-                    img_buffer_pdf = io.BytesIO(image_data)
-                    img = RLImage(img_buffer_pdf, width=6*inch, height=4*inch)
-                    story.append(Spacer(1, 0.2*inch))
-                    story.append(img)
-                    story.append(Spacer(1, 0.2*inch))
-                except Exception as e:
-                    print(f"Error adding image: {e}")
+                # Read the modified DOCX to extract content
+                output_docx_buffer.seek(0)
+                doc_for_pdf = Document(output_docx_buffer)
 
-        print("Step 7: Building PDF...")
-        # Build the PDF
-        pdf.build(story)
+                # Create PDF document
+                pdf = SimpleDocTemplate(pdf_buffer, pagesize=A4,
+                                      topMargin=0.75*inch, bottomMargin=0.75*inch,
+                                      leftMargin=0.75*inch, rightMargin=0.75*inch)
 
-        print("Step 8: Encoding PDF to base64...")
-        # Get PDF bytes and encode to base64
-        pdf_bytes = pdf_buffer.getvalue()
-        pdf_buffer.close()
+                # Container for PDF elements
+                story = []
+                styles = getSampleStyleSheet()
 
+                # Custom styles to match the template
+                title_style = ParagraphStyle(
+                    'CustomTitle',
+                    parent=styles['Heading1'],
+                    fontSize=16,
+                    textColor=colors.HexColor('#000000'),
+                    spaceAfter=12,
+                    alignment=0
+                )
+
+                heading_style = ParagraphStyle(
+                    'CustomHeading',
+                    parent=styles['Heading2'],
+                    fontSize=14,
+                    textColor=colors.HexColor('#000000'),
+                    spaceAfter=10,
+                    spaceBefore=10,
+                    fontName='Helvetica-Bold'
+                )
+
+                body_style = ParagraphStyle(
+                    'CustomBody',
+                    parent=styles['Normal'],
+                    fontSize=11,
+                    textColor=colors.HexColor('#000000'),
+                    spaceAfter=6,
+                    leading=14
+                )
+
+                # Process each paragraph from the DOCX
+                for para in doc_for_pdf.paragraphs:
+                    text = para.text.strip()
+
+                    if not text:
+                        story.append(Spacer(1, 0.1*inch))
+                        continue
+
+                    # Determine style based on content
+                    if 'Customer Report:' in text or 'Brain Response to 40 Hz' in text:
+                        story.append(Paragraph(text, title_style))
+                    elif any(heading in text for heading in ['Background Information:', 'Understanding the SSVEP',
+                                                              'Your Brain Response:', 'Interpretation:',
+                                                              'Additional Notes', 'Contact and Follow-Up']):
+                        story.append(Paragraph(text, heading_style))
+                    else:
+                        if text.startswith('●') or text.startswith('•'):
+                            bullet_style = ParagraphStyle(
+                                'Bullet',
+                                parent=body_style,
+                                leftIndent=20,
+                                bulletIndent=10
+                            )
+                            story.append(Paragraph(text, bullet_style))
+                        else:
+                            story.append(Paragraph(text, body_style))
+
+                # Add images from the document
+                for rel in doc_for_pdf.part.rels.values():
+                    if "image" in rel.target_ref:
+                        try:
+                            image_data = rel.target_part.blob
+                            img_buffer_pdf = io.BytesIO(image_data)
+                            img = RLImage(img_buffer_pdf, width=6*inch, height=4*inch)
+                            story.append(Spacer(1, 0.2*inch))
+                            story.append(img)
+                            story.append(Spacer(1, 0.2*inch))
+                        except Exception as e:
+                            print(f"Error adding image: {e}")
+
+                # Build the PDF
+                pdf.build(story)
+                pdf_bytes = pdf_buffer.getvalue()
+                pdf_buffer.close()
+
+                conversion_method = "reportlab"
+                print("Successfully converted using reportlab (formatting may be simplified)")
+
+            except Exception as e:
+                print(f"reportlab conversion also failed: {e}")
+                raise Exception(f"All PDF conversion methods failed. Last error: {e}")
+
+        if pdf_bytes is None:
+            raise Exception("Failed to generate PDF with any conversion method")
+
+        print(f"Step 7: Encoding PDF to base64 (method: {conversion_method})...")
+        # Encode to base64
         pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
 
         print("PDF generation completed successfully!")
