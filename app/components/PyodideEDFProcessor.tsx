@@ -3,7 +3,7 @@
 /* eslint-disable @next/next/no-img-element */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { generatePatientReportPDF, downloadPDF, PatientReportData } from '../services/pdfExporter';
+import { generatePatientReportPDF, generatePatientReportDOCX, downloadPDF, downloadDOCX, PatientReportData } from '../services/pdfExporter';
 
 // Pyodide types
 declare global {
@@ -120,6 +120,15 @@ export default function PyodideEDFProcessor() {
     snr: { fmin: 1, fmax: 40, method: 'welch' },
     theta_beta_ratio: { theta_min: 4, theta_max: 7, beta_min: 13, beta_max: 30, method: 'welch' },
     time_frequency: { freq_min: 1, freq_max: 50, freq_points: 100, time_points: 200, selected_channel: 0 }
+  });
+
+  // Advanced PSD settings
+  const [showAdvancedPSDSettings, setShowAdvancedPSDSettings] = useState(false);
+  const [advancedPSDSettings, setAdvancedPSDSettings] = useState({
+    nperseg_seconds: 4.0,        // seconds (will be multiplied by sampling_frequency)
+    noverlap_proportion: 0.5,     // proportion of nperseg (0 to 1)
+    window: 'hann' as 'hann' | 'boxcar',  // window type
+    use_db: false                 // true for dB, false for power units
   });
 
   // Update raw signal duration when time frame changes
@@ -1487,45 +1496,68 @@ def analyze_psd(edf_reader, parameters):
     fmin = params.get('fmin', 0.5)
     fmax = params.get('fmax', 50)
     method = params.get('method', 'welch')
+
+    # Extract advanced settings
+    nperseg_seconds = params.get('nperseg_seconds', 4.0)
+    noverlap_proportion = params.get('noverlap_proportion', 0.5)
+    window = params.get('window', 'hann')
+    use_db = params.get('use_db', False)
+
     all_channels = get_channel_names(edf_reader)
-    
+
     # Use selected channels from interface
     try:
         selected_channels = list(js_selected_channels) if 'js_selected_channels' in globals() else all_channels[:4]
     except:
         selected_channels = all_channels[:4]
-    
+
     # Filter and limit channels
     selected_channels = [ch for ch in selected_channels if ch in all_channels]
     num_channels = min(4, len(selected_channels))  # Limit to 4 for readability
     selected_channels = selected_channels[:num_channels]
-    
+
     sample_rate = get_sample_frequency(edf_reader)
-    
+
+    # Calculate nperseg and noverlap for Welch method
+    nperseg = int(nperseg_seconds * sample_rate)
+    noverlap = int(noverlap_proportion * nperseg)
+
     fig, ax = plt.subplots(figsize=(10, 6))
-    
+
     for ch_name in selected_channels:
         ch_idx = all_channels.index(ch_name)
         signal_data = get_signal_data(edf_reader, ch_idx)
-        
+
         # Compute PSD using selected method
         if method == 'welch':
-            freqs, psd = signal.welch(signal_data, fs=sample_rate, nperseg=2048)
+            freqs, psd = signal.welch(signal_data, fs=sample_rate, nperseg=nperseg,
+                                     noverlap=noverlap, window=window)
         else:  # periodogram
             freqs = np.fft.rfftfreq(len(signal_data), 1/sample_rate)
             fft_vals = np.fft.rfft(signal_data)
             psd = (np.abs(fft_vals) ** 2) / (sample_rate * len(signal_data))
-        
+
+        # Apply dB conversion if requested
+        if use_db:
+            psd = 10 * np.log10(psd + 1e-20)  # Add small value to avoid log(0)
+
         # Filter frequency range
         freq_mask = (freqs >= fmin) & (freqs <= fmax)
         freqs_filtered = freqs[freq_mask]
         psd_filtered = psd[freq_mask]
-        
-        # Plot
-        ax.semilogy(freqs_filtered, psd_filtered, label=ch_name, alpha=0.7)
-    
+
+        # Plot (use linear scale for dB, log scale for power)
+        if use_db:
+            ax.plot(freqs_filtered, psd_filtered, label=ch_name, alpha=0.7)
+        else:
+            ax.semilogy(freqs_filtered, psd_filtered, label=ch_name, alpha=0.7)
+
     ax.set_xlabel('Frequency (Hz)')
-    ax.set_ylabel('Power Spectral Density (V²/Hz)')
+    # Set y-axis label based on units
+    if use_db:
+        ax.set_ylabel('Power Spectral Density (dB/Hz)')
+    else:
+        ax.set_ylabel('Power Spectral Density (V²/Hz)')
     method_title = method.capitalize()
     ax.set_title(f'Power Spectral Density ({method_title})')
     ax.legend()
@@ -2472,7 +2504,11 @@ export_modified_edf()
       if (analysisType === 'raw_signal') {
         parameters = analysisParams.raw_signal;
       } else if (analysisType === 'psd') {
-        parameters = analysisParams.psd;
+        // Merge base parameters with advanced settings for PSD
+        parameters = {
+          ...analysisParams.psd,
+          ...advancedPSDSettings
+        };
       } else if (analysisType === 'snr') {
         parameters = analysisParams.snr;
       } else if (analysisType === 'theta_beta_ratio') {
@@ -2549,16 +2585,70 @@ export_modified_edf()
     });
   };
 
+  const prepareReportData = (): PatientReportData | null => {
+    if (!metadata || !currentFile) {
+      return null;
+    }
+
+    // Find the LAST (most recent) PSD analysis result
+    const psdResults = analysisResults.filter(r => r.analysis_type === 'psd');
+    const psdResult = psdResults.length > 0 ? psdResults[psdResults.length - 1] : null;
+
+    if (!psdResult) {
+      return null;
+    }
+
+    return {
+      // Patient information (can be extended to accept user input)
+      patientName: 'Patient Name', // TODO: Add input fields for this
+      patientId: metadata.subject_id || 'N/A',
+      examDate: new Date().toISOString().split('T')[0],
+
+      // File information
+      fileName: currentFile.name,
+      recordingDate: metadata.start_date && metadata.start_time
+        ? `${metadata.start_date} ${metadata.start_time}`
+        : 'N/A',
+      duration: metadata.duration_seconds,
+      samplingRate: metadata.sampling_frequency,
+      numChannels: metadata.num_channels,
+      channelNames: metadata.channel_names,
+
+      // Analysis parameters
+      selectedChannels: selectedChannels,
+      timeFrame: psdResult.time_frame ? {
+        start: psdResult.time_frame.start,
+        end: psdResult.time_frame.end,
+        start_real_time: psdResult.time_frame.start_real_time,
+        end_real_time: psdResult.time_frame.end_real_time,
+      } : undefined,
+
+      // PSD analysis results
+      psdMethod: psdResult.parameters?.method || 'welch',
+      frequencyRange: {
+        min: psdResult.parameters?.fmin || 0.5,
+        max: psdResult.parameters?.fmax || 50,
+      },
+      psdPlotBase64: psdResult.plot_base64, // The base64 encoded plot
+
+      // Annotations
+      annotations: annotations.map(ann => ({
+        time: ann.onset,
+        type: 'event',
+        description: ann.description || 'N/A',
+      })),
+    };
+  };
+
   const generatePatientReport = async () => {
     if (!pyodideReady || !metadata || !currentFile) {
       setError('Cannot generate report: File not loaded or Python environment not ready');
       return;
     }
 
-    // Find the most recent PSD analysis result
-    const psdResult = analysisResults.find(r => r.analysis_type === 'psd');
+    const reportData = prepareReportData();
 
-    if (!psdResult) {
+    if (!reportData) {
       setError('Please run PSD analysis first before generating the report');
       return;
     }
@@ -2568,48 +2658,6 @@ export_modified_edf()
     setLoadingMessage('Generating patient report PDF...');
 
     try {
-      // Prepare report data
-      const reportData: PatientReportData = {
-        // Patient information (can be extended to accept user input)
-        patientName: 'Patient Name', // TODO: Add input fields for this
-        patientId: metadata.subject_id || 'N/A',
-        examDate: new Date().toISOString().split('T')[0],
-
-        // File information
-        fileName: currentFile.name,
-        recordingDate: metadata.start_date && metadata.start_time
-          ? `${metadata.start_date} ${metadata.start_time}`
-          : 'N/A',
-        duration: metadata.duration_seconds,
-        samplingRate: metadata.sampling_frequency,
-        numChannels: metadata.num_channels,
-        channelNames: metadata.channel_names,
-
-        // Analysis parameters
-        selectedChannels: selectedChannels,
-        timeFrame: psdResult.time_frame ? {
-          start: psdResult.time_frame.start,
-          end: psdResult.time_frame.end,
-          start_real_time: psdResult.time_frame.start_real_time,
-          end_real_time: psdResult.time_frame.end_real_time,
-        } : undefined,
-
-        // PSD analysis results
-        psdMethod: psdResult.parameters?.method || 'welch',
-        frequencyRange: {
-          min: psdResult.parameters?.fmin || 0.5,
-          max: psdResult.parameters?.fmax || 50,
-        },
-        psdPlotBase64: psdResult.plot_base64, // The base64 encoded plot
-
-        // Annotations
-        annotations: annotations.map(ann => ({
-          time: ann.onset,
-          type: 'event',
-          description: ann.description || 'N/A',
-        })),
-      };
-
       // Generate PDF using Pyodide
       const pdfBase64 = await generatePatientReportPDF(pyodideRef.current, reportData);
 
@@ -2617,11 +2665,47 @@ export_modified_edf()
       const filename = `EEG_Report_${reportData.patientId}_${new Date().toISOString().split('T')[0]}.pdf`;
       downloadPDF(pdfBase64, filename);
 
-      setSuccess('Patient report generated successfully!');
+      setSuccess('Patient report PDF generated successfully!');
 
     } catch (error) {
       console.error('Report generation error:', error);
-      setError(`Failed to generate report: ${error}`);
+      setError(`Failed to generate PDF report: ${error}`);
+    } finally {
+      setGeneratingPDF(false);
+      setLoadingMessage('');
+    }
+  };
+
+  const generatePatientReportDOCXFile = async () => {
+    if (!pyodideReady || !metadata || !currentFile) {
+      setError('Cannot generate report: File not loaded or Python environment not ready');
+      return;
+    }
+
+    const reportData = prepareReportData();
+
+    if (!reportData) {
+      setError('Please run PSD analysis first before generating the report');
+      return;
+    }
+
+    setGeneratingPDF(true);
+    clearMessages();
+    setLoadingMessage('Generating patient report DOCX...');
+
+    try {
+      // Generate DOCX using Pyodide
+      const docxBase64 = await generatePatientReportDOCX(pyodideRef.current, reportData);
+
+      // Download the DOCX
+      const filename = `EEG_Report_${reportData.patientId}_${new Date().toISOString().split('T')[0]}.docx`;
+      downloadDOCX(docxBase64, filename);
+
+      setSuccess('Patient report DOCX generated successfully! You can convert it to PDF locally for perfect formatting.');
+
+    } catch (error) {
+      console.error('Report generation error:', error);
+      setError(`Failed to generate DOCX report: ${error}`);
     } finally {
       setGeneratingPDF(false);
       setLoadingMessage('');
@@ -3592,77 +3676,209 @@ export_modified_edf()
               </div>
 
               {/* PSD */}
-              <div className="bg-gray-50 p-4 rounded-lg">
+              <div className="bg-gray-50 p-4 rounded-lg relative">
                 <h4 className="font-semibold mb-3">🌊 Power Spectral Density</h4>
-                <div className="mb-3">
-                  <label className="block text-sm font-medium mb-1">Min Freq (Hz):</label>
-                  <input
-                    type="number"
-                    value={analysisParams.psd.fmin}
-                    onChange={(e) => setAnalysisParams(prev => ({
-                      ...prev,
-                      psd: { ...prev.psd, fmin: parseFloat(e.target.value) }
-                    }))}
-                    step="0.1"
-                    min="0"
-                    className="w-full p-2 border border-gray-300 rounded text-sm"
-                  />
-                </div>
-                <div className="mb-3">
-                  <label className="block text-sm font-medium mb-1">Max Freq (Hz):</label>
-                  <input
-                    type="number"
-                    value={analysisParams.psd.fmax}
-                    onChange={(e) => setAnalysisParams(prev => ({
-                      ...prev,
-                      psd: { ...prev.psd, fmax: parseFloat(e.target.value) }
-                    }))}
-                    step="0.1"
-                    min="1"
-                    className="w-full p-2 border border-gray-300 rounded text-sm"
-                  />
-                </div>
-                <div className="mb-3">
-                  <label className="block text-sm font-medium mb-1">Spectrum Method:</label>
-                  <div className="flex bg-gray-100 rounded-lg p-1">
-                    <button
-                      onClick={() => setAnalysisParams(prev => ({
-                        ...prev,
-                        psd: { ...prev.psd, method: 'welch' }
-                      }))}
-                      className={`flex-1 px-3 py-1 rounded-md text-sm font-medium transition-colors ${
-                        analysisParams.psd.method === 'welch' 
-                          ? 'bg-blue-600 text-white shadow-sm' 
-                          : 'text-gray-700 hover:bg-gray-200'
-                      }`}
-                    >
-                      Welch
-                    </button>
-                    <button
-                      onClick={() => setAnalysisParams(prev => ({
-                        ...prev,
-                        psd: { ...prev.psd, method: 'periodogram' }
-                      }))}
-                      className={`flex-1 px-3 py-1 rounded-md text-sm font-medium transition-colors ${
-                        analysisParams.psd.method === 'periodogram' 
-                          ? 'bg-blue-600 text-white shadow-sm' 
-                          : 'text-gray-700 hover:bg-gray-200'
-                      }`}
-                    >
-                      Periodogram
-                    </button>
+                <div className="flex gap-4">
+                  {/* Main PSD settings */}
+                  <div className="flex-1">
+                    <div className="mb-3">
+                      <label className="block text-sm font-medium mb-1">Min Freq (Hz):</label>
+                      <input
+                        type="number"
+                        value={analysisParams.psd.fmin}
+                        onChange={(e) => setAnalysisParams(prev => ({
+                          ...prev,
+                          psd: { ...prev.psd, fmin: parseFloat(e.target.value) }
+                        }))}
+                        step="0.1"
+                        min="0"
+                        className="w-full p-2 border border-gray-300 rounded text-sm"
+                      />
+                    </div>
+                    <div className="mb-3">
+                      <label className="block text-sm font-medium mb-1">Max Freq (Hz):</label>
+                      <input
+                        type="number"
+                        value={analysisParams.psd.fmax}
+                        onChange={(e) => setAnalysisParams(prev => ({
+                          ...prev,
+                          psd: { ...prev.psd, fmax: parseFloat(e.target.value) }
+                        }))}
+                        step="0.1"
+                        min="1"
+                        className="w-full p-2 border border-gray-300 rounded text-sm"
+                      />
+                    </div>
+                    <div className="mb-3">
+                      <label className="block text-sm font-medium mb-1">Spectrum Method:</label>
+                      <div className="flex bg-gray-100 rounded-lg p-1">
+                        <button
+                          onClick={() => setAnalysisParams(prev => ({
+                            ...prev,
+                            psd: { ...prev.psd, method: 'welch' }
+                          }))}
+                          className={`flex-1 px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                            analysisParams.psd.method === 'welch'
+                              ? 'bg-blue-600 text-white shadow-sm'
+                              : 'text-gray-700 hover:bg-gray-200'
+                          }`}
+                        >
+                          Welch
+                        </button>
+                        <button
+                          onClick={() => setAnalysisParams(prev => ({
+                            ...prev,
+                            psd: { ...prev.psd, method: 'periodogram' }
+                          }))}
+                          className={`flex-1 px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                            analysisParams.psd.method === 'periodogram'
+                              ? 'bg-blue-600 text-white shadow-sm'
+                              : 'text-gray-700 hover:bg-gray-200'
+                          }`}
+                        >
+                          Periodogram
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => runTraditionalAnalysis('psd')}
+                        disabled={isAnalyzing}
+                        className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded text-sm disabled:opacity-50 flex items-center justify-center"
+                      >
+                        {isAnalyzing && (
+                          <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white mr-1"></div>
+                        )}
+                        Compute PSD
+                      </button>
+                      <button
+                        onClick={() => setShowAdvancedPSDSettings(!showAdvancedPSDSettings)}
+                        className="px-3 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded text-sm font-medium transition-colors"
+                        title="Advanced Settings"
+                      >
+                        ⚙️
+                      </button>
+                    </div>
                   </div>
-                </div>
-                <button
-                  onClick={() => runTraditionalAnalysis('psd')}
-                  disabled={isAnalyzing}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded text-sm disabled:opacity-50 flex items-center justify-center"
-                >
-                  {isAnalyzing && (
-                    <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white mr-1"></div>
+
+                  {/* Advanced settings panel */}
+                  {showAdvancedPSDSettings && (
+                    <div className="w-64 bg-white border-2 border-blue-200 rounded-lg p-3 shadow-lg">
+                      <div className="flex justify-between items-center mb-3">
+                        <h5 className="font-semibold text-sm">⚙️ Advanced Settings</h5>
+                        <button
+                          onClick={() => setShowAdvancedPSDSettings(false)}
+                          className="text-gray-500 hover:text-gray-700 font-bold"
+                        >
+                          ✕
+                        </button>
+                      </div>
+
+                      {/* Welch-specific settings */}
+                      {analysisParams.psd.method === 'welch' && (
+                        <>
+                          <div className="mb-3">
+                            <label className="block text-xs font-medium mb-1">Segment Length (seconds):</label>
+                            <input
+                              type="number"
+                              value={advancedPSDSettings.nperseg_seconds}
+                              onChange={(e) => setAdvancedPSDSettings(prev => ({
+                                ...prev,
+                                nperseg_seconds: parseFloat(e.target.value)
+                              }))}
+                              step="0.5"
+                              min="0.5"
+                              className="w-full p-2 border border-gray-300 rounded text-xs"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">Default: 4s</p>
+                          </div>
+
+                          <div className="mb-3">
+                            <label className="block text-xs font-medium mb-1">Overlap (0-1):</label>
+                            <input
+                              type="number"
+                              value={advancedPSDSettings.noverlap_proportion}
+                              onChange={(e) => setAdvancedPSDSettings(prev => ({
+                                ...prev,
+                                noverlap_proportion: Math.min(1, Math.max(0, parseFloat(e.target.value)))
+                              }))}
+                              step="0.1"
+                              min="0"
+                              max="1"
+                              className="w-full p-2 border border-gray-300 rounded text-xs"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">Proportion of segment length. Default: 0.5</p>
+                          </div>
+
+                          <div className="mb-3">
+                            <label className="block text-xs font-medium mb-1">Window:</label>
+                            <div className="flex bg-gray-100 rounded-lg p-1">
+                              <button
+                                onClick={() => setAdvancedPSDSettings(prev => ({
+                                  ...prev,
+                                  window: 'hann'
+                                }))}
+                                className={`flex-1 px-2 py-1 rounded-md text-xs font-medium transition-colors ${
+                                  advancedPSDSettings.window === 'hann'
+                                    ? 'bg-blue-600 text-white shadow-sm'
+                                    : 'text-gray-700 hover:bg-gray-200'
+                                }`}
+                              >
+                                Hann
+                              </button>
+                              <button
+                                onClick={() => setAdvancedPSDSettings(prev => ({
+                                  ...prev,
+                                  window: 'boxcar'
+                                }))}
+                                className={`flex-1 px-2 py-1 rounded-md text-xs font-medium transition-colors ${
+                                  advancedPSDSettings.window === 'boxcar'
+                                    ? 'bg-blue-600 text-white shadow-sm'
+                                    : 'text-gray-700 hover:bg-gray-200'
+                                }`}
+                              >
+                                Boxcar
+                              </button>
+                            </div>
+                          </div>
+                        </>
+                      )}
+
+                      {/* dB/Power toggle (for all methods) */}
+                      <div className="mb-2">
+                        <label className="block text-xs font-medium mb-1">Units:</label>
+                        <div className="flex bg-gray-100 rounded-lg p-1">
+                          <button
+                            onClick={() => setAdvancedPSDSettings(prev => ({
+                              ...prev,
+                              use_db: false
+                            }))}
+                            className={`flex-1 px-2 py-1 rounded-md text-xs font-medium transition-colors ${
+                              !advancedPSDSettings.use_db
+                                ? 'bg-blue-600 text-white shadow-sm'
+                                : 'text-gray-700 hover:bg-gray-200'
+                            }`}
+                          >
+                            Power
+                          </button>
+                          <button
+                            onClick={() => setAdvancedPSDSettings(prev => ({
+                              ...prev,
+                              use_db: true
+                            }))}
+                            className={`flex-1 px-2 py-1 rounded-md text-xs font-medium transition-colors ${
+                              advancedPSDSettings.use_db
+                                ? 'bg-blue-600 text-white shadow-sm'
+                                : 'text-gray-700 hover:bg-gray-200'
+                            }`}
+                          >
+                            dB
+                          </button>
+                        </div>
+                      </div>
+                    </div>
                   )}
-                  Compute PSD
-                </button>
+                </div>
               </div>
 
               {/* SNR */}
@@ -3955,23 +4171,38 @@ export_modified_edf()
                 <li>Analysis summary</li>
               </ul>
             </div>
-            <button
-              onClick={generatePatientReport}
-              disabled={generatingPDF || !pyodideReady}
-              className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white py-3 px-6 rounded-lg text-base font-medium flex items-center justify-center transition-colors shadow-md hover:shadow-lg"
-            >
-              {generatingPDF ? (
-                <>
-                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
-                  Generating PDF Report...
-                </>
-              ) : (
-                <>
-                  <span className="text-2xl mr-2">📥</span>
-                  Generate Patient Report PDF
-                </>
-              )}
-            </button>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <button
+                onClick={generatePatientReportDOCXFile}
+                disabled={generatingPDF || !pyodideReady}
+                className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white py-3 px-6 rounded-lg text-base font-medium flex items-center justify-center transition-colors shadow-md hover:shadow-lg"
+              >
+                {generatingPDF ? (
+                  <>
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                    Generating DOCX...
+                  </>
+                ) : (
+                  <>
+                    <span className="text-2xl mr-2">📄</span>
+                    Download DOCX (Perfect Formatting)
+                  </>
+                )}
+              </button>
+              <button
+                // onClick={generatePatientReport}
+                disabled={true}
+                className="w-full bg-gray-300 cursor-not-allowed text-gray-500 py-3 px-6 rounded-lg text-base font-medium flex items-center justify-center transition-colors shadow-md"
+              >
+                <span className="text-2xl mr-2">📥</span>
+                <span className="line-through">Generate PDF Report</span>
+                <span className="ml-2 text-xs">(Coming Soon)</span>
+              </button>
+            </div>
+            <p className="text-sm text-gray-600 mt-3">
+              💡 <strong>Tip:</strong> Download DOCX for perfect formatting preservation (headers, footers, fonts).
+              You can convert it to PDF locally using Word or Google Docs.
+            </p>
           </div>
         )}
 
