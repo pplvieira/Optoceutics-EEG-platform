@@ -157,6 +157,37 @@ def generate_patient_report_pdf():
         c = canvas.Canvas(plot_page_buffer, pagesize=A4)
         width, height = A4
 
+        # Draw header (dark blue bar with gold accent line)
+        # Header background - dark blue/gray (#4A5568 or similar)
+        c.setFillColorRGB(0.29, 0.33, 0.41)  # Dark blue-gray
+        c.rect(0, height - 60, width, 60, fill=True, stroke=False)
+
+        # Gold/orange accent line below header
+        c.setFillColorRGB(0.85, 0.65, 0.13)  # Gold/orange
+        c.rect(0, height - 65, width, 5, fill=True, stroke=False)
+
+        # Draw footer (dark blue bar)
+        c.setFillColorRGB(0.29, 0.33, 0.41)  # Dark blue-gray
+        c.rect(0, 0, width, 50, fill=True, stroke=False)
+
+        # Footer text (white)
+        c.setFillColorRGB(1, 1, 1)  # White
+        c.setFont("Helvetica", 9)
+
+        # Company info centered
+        footer_text1 = "OptoCeutics ApS  -  CVR-39769689"
+        footer_text2 = "Nørrebrogade 45C 4th  -  2200 Copenhagen N  -  Denmark"
+        footer_text3 = "Page 2 of 3"
+
+        # Center align footer text
+        text_width1 = c.stringWidth(footer_text1, "Helvetica", 9)
+        text_width2 = c.stringWidth(footer_text2, "Helvetica", 9)
+        text_width3 = c.stringWidth(footer_text3, "Helvetica", 9)
+
+        c.drawString((width - text_width1) / 2, 30, footer_text1)
+        c.drawString((width - text_width2) / 2, 18, footer_text2)
+        c.drawString((width - text_width3) / 2, 6, footer_text3)
+
         # Decode the plot image and open with PIL
         img_data = base64.b64decode(plot_base64)
         img_buffer = io.BytesIO(img_data)
@@ -165,14 +196,17 @@ def generate_patient_report_pdf():
         # Use ImageReader for reportlab compatibility
         img_reader = ImageReader(pil_image)
 
-        # Draw the plot centered on the page
-        # Plot dimensions: make it large but leave margins
-        plot_width = width - 2*inch
-        plot_height = 4.5*inch
+        # Draw the plot centered in the content area (between header and footer)
+        # Content area: from y=50 (footer) to y=height-65 (header)
+        content_height = height - 65 - 50  # Space between header and footer
 
-        # Position: centered horizontally, starting from top with margin
+        # Plot dimensions: fill most of the content area with margins
+        plot_width = width - 2*inch
+        plot_height = content_height - 2*inch  # Leave 1 inch margin top and bottom
+
+        # Position: centered horizontally and vertically in content area
         x = 1*inch
-        y = height - 5.5*inch  # From top
+        y = 50 + 1*inch  # Footer height + bottom margin
 
         c.drawImage(img_reader, x, y, width=plot_width, height=plot_height,
                     preserveAspectRatio=True, anchor='sw')
@@ -184,9 +218,33 @@ def generate_patient_report_pdf():
         plot_reader = PdfReader(plot_page_buffer)
         writer.add_page(plot_reader.pages[0])
 
-    # Add page 2 from template (Interpretation and rest)
+    # Add page 2 from template (Interpretation and rest) - now page 3
     if len(reader.pages) > 1:
         page2 = reader.pages[1]
+
+        # Create overlay to update page number from "Page 2 of 2" to "Page 3 of 3"
+        page_number_overlay = io.BytesIO()
+        c = canvas.Canvas(page_number_overlay, pagesize=A4)
+        width, height = A4
+
+        # Cover the old page number with a dark blue rectangle
+        c.setFillColorRGB(0.29, 0.33, 0.41)  # Dark blue-gray (same as footer)
+        c.rect(width/2 - 50, 0, 100, 15, fill=True, stroke=False)
+
+        # Write new page number
+        c.setFillColorRGB(1, 1, 1)  # White
+        c.setFont("Helvetica", 9)
+        page_text = "Page 3 of 3"
+        text_width = c.stringWidth(page_text, "Helvetica", 9)
+        c.drawString((width - text_width) / 2, 6, page_text)
+
+        c.save()
+
+        # Merge the page number overlay with page 2
+        page_number_overlay.seek(0)
+        page_number_reader = PdfReader(page_number_overlay)
+        page2.merge_page(page_number_reader.pages[0])
+
         writer.add_page(page2)
 
     # Write final PDF to buffer
