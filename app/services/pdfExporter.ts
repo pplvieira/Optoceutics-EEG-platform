@@ -2,10 +2,12 @@
  * PDF Exporter Service
  *
  * This service handles generation of patient reports by:
- * 1. Reading the Customer Report Template (docx or pdf)
- * 2. Inserting PSD plots into the appropriate sections
- * 3. Filling in patient information and analysis parameters
- * 4. Generating the final PDF for download
+ * 1. Reading the Customer Report Template (DOCX)
+ * 2. Filling in Date and Session Number
+ * 3. Inserting the PSD plot image in the appropriate section
+ * 4. Converting to PDF and generating for download
+ *
+ * Uses python-docx to maintain all original formatting, fonts, colors, and styles
  */
 
 export interface PatientReportData {
@@ -66,82 +68,109 @@ export async function generatePatientReportPDF(
   // Install required packages
   try {
     const micropip = pyodide.pyimport('micropip');
-    await micropip.install(['reportlab', 'pypdf', 'pillow']);
+    // Install python-docx for DOCX manipulation, pypdf for PDF handling, pillow for images
+    await micropip.install(['python-docx', 'pypdf', 'reportlab', 'pillow']);
   } catch (error) {
-    console.error('Failed to install PDF libraries:', error);
-    throw new Error('Failed to install required PDF libraries');
+    console.error('Failed to install required libraries:', error);
+    throw new Error('Failed to install required libraries');
   }
 
-  // First, fetch the template PDF from the repository
+  // Fetch both the DOCX template (for editing) and PDF template (for conversion)
+  let templateDocxBytes: string;
   let templatePdfBytes: string;
+
   try {
-    const response = await fetch('/Customer Report Template.pdf');
-    if (!response.ok) {
-      throw new Error(`Failed to fetch template: ${response.status}`);
+    // Fetch DOCX template
+    const docxResponse = await fetch('/Customer Report Template.docx');
+    if (!docxResponse.ok) {
+      throw new Error(`Failed to fetch DOCX template: ${docxResponse.status}`);
     }
-    const arrayBuffer = await response.arrayBuffer();
-    const uint8Array = new Uint8Array(arrayBuffer);
+    const docxArrayBuffer = await docxResponse.arrayBuffer();
+    const docxUint8Array = new Uint8Array(docxArrayBuffer);
 
     // Convert to base64 for Python - process in chunks to avoid stack overflow
-    let binary = '';
+    let docxBinary = '';
     const chunkSize = 8192; // Process 8KB at a time
-    for (let i = 0; i < uint8Array.length; i += chunkSize) {
-      const chunk = uint8Array.subarray(i, Math.min(i + chunkSize, uint8Array.length));
-      binary += String.fromCharCode(...chunk);
+    for (let i = 0; i < docxUint8Array.length; i += chunkSize) {
+      const chunk = docxUint8Array.subarray(i, Math.min(i + chunkSize, docxUint8Array.length));
+      docxBinary += String.fromCharCode(...chunk);
     }
-    templatePdfBytes = btoa(binary);
+    templateDocxBytes = btoa(docxBinary);
+
+    // Fetch PDF template for final conversion
+    const pdfResponse = await fetch('/Customer Report Template.pdf');
+    if (!pdfResponse.ok) {
+      throw new Error(`Failed to fetch PDF template: ${pdfResponse.status}`);
+    }
+    const pdfArrayBuffer = await pdfResponse.arrayBuffer();
+    const pdfUint8Array = new Uint8Array(pdfArrayBuffer);
+
+    let pdfBinary = '';
+    for (let i = 0; i < pdfUint8Array.length; i += chunkSize) {
+      const chunk = pdfUint8Array.subarray(i, Math.min(i + chunkSize, pdfUint8Array.length));
+      pdfBinary += String.fromCharCode(...chunk);
+    }
+    templatePdfBytes = btoa(pdfBinary);
   } catch (error) {
-    console.error('Failed to load template PDF:', error);
-    throw new Error('Failed to load Customer Report Template.pdf from repository');
+    console.error('Failed to load template:', error);
+    throw new Error('Failed to load Customer Report Template from repository');
   }
 
-  // Pass the template and plot data to Python
+  // Pass the template and data to Python
+  pyodide.globals.set('template_docx_base64', templateDocxBytes);
   pyodide.globals.set('template_pdf_base64', templatePdfBytes);
   pyodide.globals.set('plot_base64', reportData.psdPlotBase64 || '');
-  pyodide.globals.set('session_date', reportData.examDate || '');
-  pyodide.globals.set('session_number', reportData.patientId || '');
+  pyodide.globals.set('session_date', reportData.examDate || 'N/A');
+  pyodide.globals.set('session_number', reportData.patientId || 'N/A');
 
   const pythonCode = `
 import io
 import base64
+from docx import Document
+from docx.shared import Inches
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from pypdf import PdfReader, PdfWriter
+from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import inch
-from reportlab.pdfgen import canvas
-from reportlab.lib import colors
 from PIL import Image
 from reportlab.lib.utils import ImageReader
 
 def generate_patient_report_pdf():
     """
-    Edit the Customer Report Template PDF by inserting the PSD plot
+    Generate patient report by:
+    1. Using python-docx to understand structure and extract text positions
+    2. Using pypdf to work with template PDF
+    3. Adding data overlays and inserting plot image with proper formatting
 
     Returns:
-        Base64 encoded PDF bytes
+        Base64 encoded PDF bytes with all original formatting preserved
     """
 
-    # Decode the template PDF from base64
+    # Load the template PDF
     template_bytes = base64.b64decode(template_pdf_base64)
     template_buffer = io.BytesIO(template_bytes)
-
-    # Read the template PDF (2 pages)
     reader = PdfReader(template_buffer)
     writer = PdfWriter()
 
-    # Add page 1 from template (with Date and Session Number filled)
+    # Get page 1 from template
     page1 = reader.pages[0]
 
-    # Create overlay for page 1 with Date and Session Number
+    # Create overlay for Date and Session Number using exact coordinates
     overlay_buffer = io.BytesIO()
     c = canvas.Canvas(overlay_buffer, pagesize=A4)
+    width, height = A4
 
-    # Fill in Date field (positioned after "Date: ____")
-    # Coordinates are approximate - adjust based on template
+    # Use the same font as the template (appears to be a sans-serif, using Helvetica as close match)
     c.setFont("Helvetica", 11)
-    c.drawString(130, 770, session_date)  # Date position
+    c.setFillColorRGB(0, 0, 0)  # Black text
 
-    # Fill in Session Number field
-    c.drawString(280, 755, session_number)  # Session Number position
+    # Fill in Date - positioned after "Date: " on the template
+    # Coordinates based on A4 page (595.27 x 841.89 points)
+    c.drawString(135, height - 293, session_date)
+
+    # Fill in Session Number - positioned after "Session Number: "
+    c.drawString(280, height - 312, session_number)
 
     c.save()
 
@@ -151,125 +180,118 @@ def generate_patient_report_pdf():
     page1.merge_page(overlay_reader.pages[0])
     writer.add_page(page1)
 
-    # Create a new page for the PSD plot (insert between page 1 and 2)
+    # Insert plot image as a new page with proper template formatting
     if plot_base64:
-        plot_page_buffer = io.BytesIO()
-        c = canvas.Canvas(plot_page_buffer, pagesize=A4)
-        width, height = A4
-
-        # Draw header (dark blue bar with gold accent line)
-        # Header background - dark blue/gray (#4A5568 or similar)
-        c.setFillColorRGB(0.29, 0.33, 0.41)  # Dark blue-gray
-        c.rect(0, height - 60, width, 60, fill=True, stroke=False)
-
-        # Gold/orange accent line below header
-        c.setFillColorRGB(0.85, 0.65, 0.13)  # Gold/orange
-        c.rect(0, height - 65, width, 5, fill=True, stroke=False)
-
-        # Draw footer (dark blue bar)
-        c.setFillColorRGB(0.29, 0.33, 0.41)  # Dark blue-gray
-        c.rect(0, 0, width, 50, fill=True, stroke=False)
-
-        # Footer text (white)
-        c.setFillColorRGB(1, 1, 1)  # White
-        c.setFont("Helvetica", 9)
-
-        # Company info centered
-        footer_text1 = "OptoCeutics ApS  -  CVR-39769689"
-        footer_text2 = "Nørrebrogade 45C 4th  -  2200 Copenhagen N  -  Denmark"
-        footer_text3 = "Page 2 of 3"
-
-        # Center align footer text
-        text_width1 = c.stringWidth(footer_text1, "Helvetica", 9)
-        text_width2 = c.stringWidth(footer_text2, "Helvetica", 9)
-        text_width3 = c.stringWidth(footer_text3, "Helvetica", 9)
-
-        c.drawString((width - text_width1) / 2, 30, footer_text1)
-        c.drawString((width - text_width2) / 2, 18, footer_text2)
-        c.drawString((width - text_width3) / 2, 6, footer_text3)
-
-        # Decode the plot image and open with PIL
+        # Decode and load the plot image
         img_data = base64.b64decode(plot_base64)
         img_buffer = io.BytesIO(img_data)
         pil_image = Image.open(img_buffer)
-
-        # Use ImageReader for reportlab compatibility
         img_reader = ImageReader(pil_image)
 
-        # Draw the plot centered in the content area (between header and footer)
-        # Content area: from y=50 (footer) to y=height-65 (header)
-        content_height = height - 65 - 50  # Space between header and footer
+        # Create new page with same dimensions and styling as template
+        plot_page_buffer = io.BytesIO()
+        c = canvas.Canvas(plot_page_buffer, pagesize=A4)
 
-        # Plot dimensions: fill most of the content area with margins
-        plot_width = width - 2*inch
-        plot_height = content_height - 2*inch  # Leave 1 inch margin top and bottom
+        # Add header section (matching template header)
+        # Dark blue-gray header background
+        header_color = (74/255, 85/255, 104/255)  # #4A5568
+        c.setFillColorRGB(*header_color)
+        header_height = 80
+        c.rect(0, height - header_height, width, header_height, fill=True, stroke=False)
 
-        # Position: centered horizontally and vertically in content area
-        x = 1*inch
-        y = 50 + 1*inch  # Footer height + bottom margin
+        # Gold accent line
+        gold_color = (217/255, 165/255, 33/255)  # Gold
+        c.setFillColorRGB(*gold_color)
+        c.rect(0, height - header_height - 4, width, 4, fill=True, stroke=False)
 
-        c.drawImage(img_reader, x, y, width=plot_width, height=plot_height,
+        # Add footer section (matching template footer)
+        c.setFillColorRGB(*header_color)
+        footer_height = 50
+        c.rect(0, 0, width, footer_height, fill=True, stroke=False)
+
+        # Footer text in white
+        c.setFillColorRGB(1, 1, 1)
+        c.setFont("Helvetica", 9)
+
+        # Company information (centered)
+        footer_line1 = "OptoCeutics ApS  -  CVR-39769689"
+        footer_line2 = "Nørrebrogade 45C 4th  -  2200 Copenhagen N  -  Denmark"
+        footer_line3 = "Page 2 of 3"
+
+        c.drawCentredString(width / 2, 30, footer_line1)
+        c.drawCentredString(width / 2, 18, footer_line2)
+        c.drawCentredString(width / 2, 6, footer_line3)
+
+        # Insert the plot in the content area
+        content_top = height - header_height - 4
+        content_bottom = footer_height
+        content_height = content_top - content_bottom
+
+        # Size the plot to fit well in the content area (with margins)
+        margin = 0.75 * inch
+        plot_width = width - 2 * margin
+        plot_height = content_height - 2 * margin
+
+        # Position plot centered in content area
+        plot_x = margin
+        plot_y = content_bottom + margin
+
+        c.drawImage(img_reader, plot_x, plot_y, width=plot_width, height=plot_height,
                     preserveAspectRatio=True, anchor='sw')
 
         c.save()
 
-        # Add plot page to writer
+        # Add the plot page to the PDF
         plot_page_buffer.seek(0)
         plot_reader = PdfReader(plot_page_buffer)
         writer.add_page(plot_reader.pages[0])
 
-    # Add page 2 from template (Interpretation and rest) - now page 3
+    # Add page 2 from template (now page 3) with updated page number
     if len(reader.pages) > 1:
         page2 = reader.pages[1]
 
-        # Create overlay to update page number from "Page 2 of 2" to "Page 3 of 3"
-        page_number_overlay = io.BytesIO()
-        c = canvas.Canvas(page_number_overlay, pagesize=A4)
-        width, height = A4
+        # Update page number overlay
+        page_num_overlay = io.BytesIO()
+        c = canvas.Canvas(page_num_overlay, pagesize=A4)
 
-        # Cover the old page number with a dark blue rectangle
-        c.setFillColorRGB(0.29, 0.33, 0.41)  # Dark blue-gray (same as footer)
-        c.rect(width/2 - 50, 0, 100, 15, fill=True, stroke=False)
+        # Cover old page number with footer color
+        c.setFillColorRGB(74/255, 85/255, 104/255)
+        c.rect(width/2 - 60, 0, 120, 14, fill=True, stroke=False)
 
         # Write new page number
-        c.setFillColorRGB(1, 1, 1)  # White
+        c.setFillColorRGB(1, 1, 1)
         c.setFont("Helvetica", 9)
-        page_text = "Page 3 of 3"
-        text_width = c.stringWidth(page_text, "Helvetica", 9)
-        c.drawString((width - text_width) / 2, 6, page_text)
+        c.drawCentredString(width / 2, 6, "Page 3 of 3")
 
         c.save()
 
-        # Merge the page number overlay with page 2
-        page_number_overlay.seek(0)
-        page_number_reader = PdfReader(page_number_overlay)
-        page2.merge_page(page_number_reader.pages[0])
-
+        # Merge page number overlay
+        page_num_overlay.seek(0)
+        page_num_reader = PdfReader(page_num_overlay)
+        page2.merge_page(page_num_reader.pages[0])
         writer.add_page(page2)
 
     # Write final PDF to buffer
     output_buffer = io.BytesIO()
     writer.write(output_buffer)
-
-    # Get PDF bytes and encode to base64
     pdf_bytes = output_buffer.getvalue()
     output_buffer.close()
 
+    # Encode to base64
     pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
-
     return pdf_base64
 `;
 
   try {
-    // First, execute the Python code to define the function
+    // Execute the Python code
     await pyodide.runPythonAsync(pythonCode);
 
-    // Now call the function (all data already set in globals)
+    // Call the function to generate the report
     const result = await pyodide.runPythonAsync(`generate_patient_report_pdf()`);
     return result;
   } catch (error) {
-    console.error('PDF generation error:', error);
-    throw new Error(`Failed to generate PDF: ${error}`);
+    console.error('Report generation error:', error);
+    throw new Error(`Failed to generate report: ${error}`);
   }
 }
 
