@@ -3,6 +3,7 @@
 /* eslint-disable @next/next/no-img-element */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { generatePatientReportPDF, downloadPDF, PatientReportData } from '../services/pdfExporter';
 
 // Pyodide types
 declare global {
@@ -100,6 +101,7 @@ export default function PyodideEDFProcessor() {
   const [useTimeFrame, setUseTimeFrame] = useState<boolean>(false);
   const [annotations, setAnnotations] = useState<EDFAnnotation[]>([]);
   const [annotationsNeedUpdate, setAnnotationsNeedUpdate] = useState<boolean>(false);
+  const [generatingPDF, setGeneratingPDF] = useState<boolean>(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pyodideRef = useRef<any>(null);
@@ -2547,6 +2549,85 @@ export_modified_edf()
     });
   };
 
+  const generatePatientReport = async () => {
+    if (!pyodideReady || !metadata || !currentFile) {
+      setError('Cannot generate report: File not loaded or Python environment not ready');
+      return;
+    }
+
+    // Find the most recent PSD analysis result
+    const psdResult = analysisResults.find(r => r.analysis_type === 'psd');
+
+    if (!psdResult) {
+      setError('Please run PSD analysis first before generating the report');
+      return;
+    }
+
+    setGeneratingPDF(true);
+    clearMessages();
+    setLoadingMessage('Generating patient report PDF...');
+
+    try {
+      // Prepare report data
+      const reportData: PatientReportData = {
+        // Patient information (can be extended to accept user input)
+        patientName: 'Patient Name', // TODO: Add input fields for this
+        patientId: metadata.subject_id || 'N/A',
+        examDate: new Date().toISOString().split('T')[0],
+
+        // File information
+        fileName: currentFile.name,
+        recordingDate: metadata.start_date && metadata.start_time
+          ? `${metadata.start_date} ${metadata.start_time}`
+          : 'N/A',
+        duration: metadata.duration_seconds,
+        samplingRate: metadata.sampling_frequency,
+        numChannels: metadata.num_channels,
+        channelNames: metadata.channel_names,
+
+        // Analysis parameters
+        selectedChannels: selectedChannels,
+        timeFrame: psdResult.time_frame ? {
+          start: psdResult.time_frame.start,
+          end: psdResult.time_frame.end,
+          start_real_time: psdResult.time_frame.start_real_time,
+          end_real_time: psdResult.time_frame.end_real_time,
+        } : undefined,
+
+        // PSD analysis results
+        psdMethod: psdResult.parameters?.method || 'welch',
+        frequencyRange: {
+          min: psdResult.parameters?.fmin || 0.5,
+          max: psdResult.parameters?.fmax || 50,
+        },
+        psdPlotBase64: psdResult.plot_base64, // The base64 encoded plot
+
+        // Annotations
+        annotations: annotations.map(ann => ({
+          time: ann.onset,
+          type: 'event',
+          description: ann.description || 'N/A',
+        })),
+      };
+
+      // Generate PDF using Pyodide
+      const pdfBase64 = await generatePatientReportPDF(pyodideRef.current, reportData);
+
+      // Download the PDF
+      const filename = `EEG_Report_${reportData.patientId}_${new Date().toISOString().split('T')[0]}.pdf`;
+      downloadPDF(pdfBase64, filename);
+
+      setSuccess('Patient report generated successfully!');
+
+    } catch (error) {
+      console.error('Report generation error:', error);
+      setError(`Failed to generate report: ${error}`);
+    } finally {
+      setGeneratingPDF(false);
+      setLoadingMessage('');
+    }
+  };
+
   const renderSSVEPResults = () => {
     if (!ssvepResult) return null;
 
@@ -3854,6 +3935,45 @@ export_modified_edf()
         {/* Results */}
         {renderSSVEPResults()}
         {renderAnalysisResults()}
+
+        {/* Generate Patient Report PDF */}
+        {analysisResults.some(r => r.analysis_type === 'psd') && (
+          <div className="bg-white rounded-lg shadow-lg p-6 mt-4">
+            <h3 className="text-lg font-bold mb-4">📄 Patient Report Generation</h3>
+            <p className="text-gray-600 mb-4">
+              Generate a comprehensive patient report PDF using the PSD analysis results.
+              The report will include recording information, analysis parameters, frequency bands,
+              and the Power Spectral Density plot for the selected time interval.
+            </p>
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+              <h4 className="font-semibold text-blue-900 mb-2">Report will include:</h4>
+              <ul className="list-disc list-inside text-sm text-blue-800 space-y-1">
+                <li>Patient and recording information</li>
+                <li>Selected time frame and analysis parameters</li>
+                <li>PSD plot for &quot;During 40 Hz Visual Stimulation with EVY Light&quot; section</li>
+                <li>Channel information and annotations</li>
+                <li>Analysis summary</li>
+              </ul>
+            </div>
+            <button
+              onClick={generatePatientReport}
+              disabled={generatingPDF || !pyodideReady}
+              className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white py-3 px-6 rounded-lg text-base font-medium flex items-center justify-center transition-colors shadow-md hover:shadow-lg"
+            >
+              {generatingPDF ? (
+                <>
+                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                  Generating PDF Report...
+                </>
+              ) : (
+                <>
+                  <span className="text-2xl mr-2">📥</span>
+                  Generate Patient Report PDF
+                </>
+              )}
+            </button>
+          </div>
+        )}
 
         {/* Channel Rename Popup */}
         {showChannelRenamePopup && (
