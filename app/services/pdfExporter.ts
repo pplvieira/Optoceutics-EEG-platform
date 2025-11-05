@@ -81,8 +81,15 @@ export async function generatePatientReportPDF(
     }
     const arrayBuffer = await response.arrayBuffer();
     const uint8Array = new Uint8Array(arrayBuffer);
-    // Convert to base64 for Python
-    templatePdfBytes = btoa(String.fromCharCode(...uint8Array));
+
+    // Convert to base64 for Python - process in chunks to avoid stack overflow
+    let binary = '';
+    const chunkSize = 8192; // Process 8KB at a time
+    for (let i = 0; i < uint8Array.length; i += chunkSize) {
+      const chunk = uint8Array.subarray(i, Math.min(i + chunkSize, uint8Array.length));
+      binary += String.fromCharCode(...chunk);
+    }
+    templatePdfBytes = btoa(binary);
   } catch (error) {
     console.error('Failed to load template PDF:', error);
     throw new Error('Failed to load Customer Report Template.pdf from repository');
@@ -207,11 +214,10 @@ def generate_patient_report_pdf():
  */
 export function downloadPDF(base64PDF: string, filename: string) {
   const byteCharacters = atob(base64PDF);
-  const byteNumbers = new Array(byteCharacters.length);
+  const byteArray = new Uint8Array(byteCharacters.length);
   for (let i = 0; i < byteCharacters.length; i++) {
-    byteNumbers[i] = byteCharacters.charCodeAt(i);
+    byteArray[i] = byteCharacters.charCodeAt(i);
   }
-  const byteArray = new Uint8Array(byteNumbers);
   const blob = new Blob([byteArray], { type: 'application/pdf' });
 
   const url = URL.createObjectURL(blob);
