@@ -63,6 +63,15 @@ export async function generatePatientReportPDF(
   reportData: PatientReportData
 ): Promise<string> {
 
+  // Install reportlab if not already installed
+  try {
+    const micropip = pyodide.pyimport('micropip');
+    await micropip.install(['reportlab']);
+  } catch (error) {
+    console.error('Failed to install reportlab:', error);
+    throw new Error('Failed to install required PDF library');
+  }
+
   // Check if template file exists
   // NOTE: Template files should be placed in /public/templates/
   // - Customer Report Template.docx OR
@@ -338,16 +347,17 @@ def generate_patient_report_pdf(report_data):
     pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
 
     return pdf_base64
-
-# Execute
-import json
-report_data_dict = json.loads('${JSON.stringify(reportData)}')
-pdf_base64_result = generate_patient_report_pdf(report_data_dict)
-pdf_base64_result
 `;
 
   try {
-    const result = await pyodide.runPythonAsync(pythonCode);
+    // First, execute the Python code to define the function
+    await pyodide.runPythonAsync(pythonCode);
+
+    // Set report data in Python globals using toPy for proper conversion
+    pyodide.globals.set('report_data', pyodide.toPy(reportData));
+
+    // Now call the function
+    const result = await pyodide.runPythonAsync(`generate_patient_report_pdf(report_data)`);
     return result;
   } catch (error) {
     console.error('PDF generation error:', error);
