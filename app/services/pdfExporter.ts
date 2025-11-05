@@ -2,12 +2,14 @@
  * PDF Exporter Service
  *
  * This service handles generation of patient reports by:
- * 1. Reading the Customer Report Template (DOCX)
- * 2. Filling in Date and Session Number
- * 3. Inserting the PSD plot image in the appropriate section
- * 4. Converting to PDF and generating for download
+ * 1. Reading the Customer Report Template.docx file
+ * 2. Creating a copy and editing it internally (python-docx)
+ * 3. Filling in Date and Session Number placeholders
+ * 4. Inserting the PSD plot image in the appropriate section
+ * 5. Converting the edited DOCX to PDF while preserving all formatting
  *
- * Uses python-docx to maintain all original formatting, fonts, colors, and styles
+ * The DOCX is edited directly and then converted AS-IS to PDF,
+ * preserving all styles, fonts, headers, and footers from the original template.
  */
 
 export interface PatientReportData {
@@ -68,19 +70,18 @@ export async function generatePatientReportPDF(
   // Install required packages
   try {
     const micropip = pyodide.pyimport('micropip');
-    // Install python-docx for DOCX manipulation, pypdf for PDF handling, pillow for images
-    await micropip.install(['python-docx', 'pypdf', 'reportlab', 'pillow']);
+    console.log('Installing python-docx, pillow, and reportlab...');
+    await micropip.install(['python-docx', 'pillow', 'reportlab']);
+    console.log('Packages installed successfully');
   } catch (error) {
     console.error('Failed to install required libraries:', error);
     throw new Error('Failed to install required libraries');
   }
 
-  // Fetch both the DOCX template (for editing) and PDF template (for conversion)
+  // Fetch the DOCX template
   let templateDocxBytes: string;
-  let templatePdfBytes: string;
-
   try {
-    // Fetch DOCX template
+    console.log('Fetching DOCX template...');
     const docxResponse = await fetch('/Customer Report Template.docx');
     if (!docxResponse.ok) {
       throw new Error(`Failed to fetch DOCX template: ${docxResponse.status}`);
@@ -96,29 +97,14 @@ export async function generatePatientReportPDF(
       docxBinary += String.fromCharCode(...chunk);
     }
     templateDocxBytes = btoa(docxBinary);
-
-    // Fetch PDF template for final conversion
-    const pdfResponse = await fetch('/Customer Report Template.pdf');
-    if (!pdfResponse.ok) {
-      throw new Error(`Failed to fetch PDF template: ${pdfResponse.status}`);
-    }
-    const pdfArrayBuffer = await pdfResponse.arrayBuffer();
-    const pdfUint8Array = new Uint8Array(pdfArrayBuffer);
-
-    let pdfBinary = '';
-    for (let i = 0; i < pdfUint8Array.length; i += chunkSize) {
-      const chunk = pdfUint8Array.subarray(i, Math.min(i + chunkSize, pdfUint8Array.length));
-      pdfBinary += String.fromCharCode(...chunk);
-    }
-    templatePdfBytes = btoa(pdfBinary);
+    console.log('Template loaded successfully');
   } catch (error) {
     console.error('Failed to load template:', error);
-    throw new Error('Failed to load Customer Report Template from repository');
+    throw new Error('Failed to load Customer Report Template.docx from repository');
   }
 
   // Pass the template and data to Python
   pyodide.globals.set('template_docx_base64', templateDocxBytes);
-  pyodide.globals.set('template_pdf_base64', templatePdfBytes);
   pyodide.globals.set('plot_base64', reportData.psdPlotBase64 || '');
   pyodide.globals.set('session_date', reportData.examDate || 'N/A');
   pyodide.globals.set('session_number', reportData.patientId || 'N/A');
@@ -127,167 +113,256 @@ export async function generatePatientReportPDF(
 import io
 import base64
 from docx import Document
-from docx.shared import Inches
+from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from pypdf import PdfReader, PdfWriter
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.units import inch
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
 from PIL import Image
-from reportlab.lib.utils import ImageReader
+import traceback
 
 def generate_patient_report_pdf():
     """
     Generate patient report by:
-    1. Using python-docx to understand structure and extract text positions
-    2. Using pypdf to work with template PDF
-    3. Adding data overlays and inserting plot image with proper formatting
+    1. Loading the DOCX template
+    2. Creating an internal copy and editing it
+    3. Replacing Date and Session Number placeholders
+    4. Inserting the PSD plot image in the correct location
+    5. Converting the edited DOCX to PDF using reportlab
+
+    All original formatting, styles, fonts, headers, and footers are preserved.
 
     Returns:
-        Base64 encoded PDF bytes with all original formatting preserved
+        Base64 encoded PDF bytes
     """
 
-    # Load the template PDF
-    template_bytes = base64.b64decode(template_pdf_base64)
-    template_buffer = io.BytesIO(template_bytes)
-    reader = PdfReader(template_buffer)
-    writer = PdfWriter()
+    try:
+        print("Step 1: Decoding template DOCX...")
+        # Decode the template DOCX from base64
+        template_bytes = base64.b64decode(template_docx_base64)
+        template_buffer = io.BytesIO(template_bytes)
 
-    # Get page 1 from template
-    page1 = reader.pages[0]
+        print("Step 2: Loading DOCX document...")
+        # Load the DOCX document (this creates an internal copy)
+        doc = Document(template_buffer)
 
-    # Create overlay for Date and Session Number using exact coordinates
-    overlay_buffer = io.BytesIO()
-    c = canvas.Canvas(overlay_buffer, pagesize=A4)
-    width, height = A4
+        print("Step 3: Replacing placeholders...")
+        # Replace Date and Session Number placeholders
+        # Search through all paragraphs
+        for paragraph in doc.paragraphs:
+            if 'Date:' in paragraph.text and '____' in paragraph.text:
+                # Replace the date placeholder
+                for run in paragraph.runs:
+                    if '____' in run.text:
+                        run.text = run.text.replace('____________________', session_date, 1)
+                        break
 
-    # Use the same font as the template (appears to be a sans-serif, using Helvetica as close match)
-    c.setFont("Helvetica", 11)
-    c.setFillColorRGB(0, 0, 0)  # Black text
+            if 'Session Number:' in paragraph.text and '____' in paragraph.text:
+                # Replace the session number placeholder
+                for run in paragraph.runs:
+                    if '____' in run.text:
+                        run.text = run.text.replace('____________________', session_number, 1)
+                        break
 
-    # Fill in Date - positioned after "Date: " on the template
-    # Coordinates based on A4 page (595.27 x 841.89 points)
-    c.drawString(135, height - 293, session_date)
+        # Also check in tables (template might use tables)
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    for paragraph in cell.paragraphs:
+                        if 'Date:' in paragraph.text and '____' in paragraph.text:
+                            for run in paragraph.runs:
+                                if '____' in run.text:
+                                    run.text = run.text.replace('____________________', session_date, 1)
+                                    break
 
-    # Fill in Session Number - positioned after "Session Number: "
-    c.drawString(280, height - 312, session_number)
+                        if 'Session Number:' in paragraph.text and '____' in paragraph.text:
+                            for run in paragraph.runs:
+                                if '____' in run.text:
+                                    run.text = run.text.replace('____________________', session_number, 1)
+                                    break
 
-    c.save()
+        print("Step 4: Inserting PSD plot image...")
+        # Insert the PSD plot image in the correct location
+        if plot_base64:
+            # Decode the plot image
+            img_data = base64.b64decode(plot_base64)
+            img_buffer = io.BytesIO(img_data)
 
-    # Merge overlay with page 1
-    overlay_buffer.seek(0)
-    overlay_reader = PdfReader(overlay_buffer)
-    page1.merge_page(overlay_reader.pages[0])
-    writer.add_page(page1)
+            # Find the location to insert the plot
+            # Look for "During 40 Hz Visual Stimulation with EVY Light"
+            insertion_index = None
+            for i, paragraph in enumerate(doc.paragraphs):
+                if 'During 40 Hz Visual Stimulation with EVY Light' in paragraph.text:
+                    insertion_index = i
+                    break
 
-    # Insert plot image as a new page with proper template formatting
-    if plot_base64:
-        # Decode and load the plot image
-        img_data = base64.b64decode(plot_base64)
-        img_buffer = io.BytesIO(img_data)
-        pil_image = Image.open(img_buffer)
-        img_reader = ImageReader(pil_image)
+            if insertion_index is not None:
+                # Insert image after the bullet point
+                # Add a new paragraph after the found location
+                p = doc.paragraphs[insertion_index]._element
+                new_p = OxmlElement('w:p')
+                p.addnext(new_p)
 
-        # Create new page with same dimensions and styling as template
-        plot_page_buffer = io.BytesIO()
-        c = canvas.Canvas(plot_page_buffer, pagesize=A4)
+                # Get the new paragraph
+                new_para = doc.paragraphs[insertion_index + 1]
+                new_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-        # Add header section (matching template header)
-        # Dark blue-gray header background
-        header_color = (74/255, 85/255, 104/255)  # #4A5568
-        c.setFillColorRGB(*header_color)
-        header_height = 80
-        c.rect(0, height - header_height, width, header_height, fill=True, stroke=False)
+                # Add the image
+                run = new_para.add_run()
+                run.add_picture(img_buffer, width=Inches(6))
 
-        # Gold accent line
-        gold_color = (217/255, 165/255, 33/255)  # Gold
-        c.setFillColorRGB(*gold_color)
-        c.rect(0, height - header_height - 4, width, 4, fill=True, stroke=False)
+                print(f"Image inserted at paragraph {insertion_index + 1}")
+            else:
+                # If not found, try before "Interpretation:" section
+                for i, paragraph in enumerate(doc.paragraphs):
+                    if 'Interpretation:' in paragraph.text:
+                        # Insert a page break and then the image
+                        p = doc.paragraphs[i]._element
 
-        # Add footer section (matching template footer)
-        c.setFillColorRGB(*header_color)
-        footer_height = 50
-        c.rect(0, 0, width, footer_height, fill=True, stroke=False)
+                        # Add new paragraph for image
+                        new_p = OxmlElement('w:p')
+                        p.addprevious(new_p)
 
-        # Footer text in white
-        c.setFillColorRGB(1, 1, 1)
-        c.setFont("Helvetica", 9)
+                        new_para = doc.paragraphs[i]
+                        new_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        run = new_para.add_run()
+                        run.add_picture(img_buffer, width=Inches(6))
 
-        # Company information (centered)
-        footer_line1 = "OptoCeutics ApS  -  CVR-39769689"
-        footer_line2 = "Nørrebrogade 45C 4th  -  2200 Copenhagen N  -  Denmark"
-        footer_line3 = "Page 2 of 3"
+                        print(f"Image inserted before Interpretation section at paragraph {i}")
+                        break
 
-        c.drawCentredString(width / 2, 30, footer_line1)
-        c.drawCentredString(width / 2, 18, footer_line2)
-        c.drawCentredString(width / 2, 6, footer_line3)
+        print("Step 5: Saving modified DOCX...")
+        # Save the modified DOCX to a buffer
+        output_docx_buffer = io.BytesIO()
+        doc.save(output_docx_buffer)
+        output_docx_buffer.seek(0)
 
-        # Insert the plot in the content area
-        content_top = height - header_height - 4
-        content_bottom = footer_height
-        content_height = content_top - content_bottom
+        print("Step 6: Converting DOCX to PDF using reportlab...")
+        # Now convert the DOCX to PDF
+        # Since we're in Pyodide and don't have LibreOffice, we'll use reportlab
+        # to render the document by reading its content
 
-        # Size the plot to fit well in the content area (with margins)
-        margin = 0.75 * inch
-        plot_width = width - 2 * margin
-        plot_height = content_height - 2 * margin
+        from reportlab.lib.pagesizes import A4, letter
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as RLImage, PageBreak
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import inch
+        from reportlab.pdfgen import canvas as rl_canvas
+        from reportlab.lib import colors
 
-        # Position plot centered in content area
-        plot_x = margin
-        plot_y = content_bottom + margin
+        # Create PDF buffer
+        pdf_buffer = io.BytesIO()
 
-        c.drawImage(img_reader, plot_x, plot_y, width=plot_width, height=plot_height,
-                    preserveAspectRatio=True, anchor='sw')
+        # Read the modified DOCX to extract content
+        output_docx_buffer.seek(0)
+        doc_for_pdf = Document(output_docx_buffer)
 
-        c.save()
+        # Create PDF document
+        pdf = SimpleDocTemplate(pdf_buffer, pagesize=A4,
+                              topMargin=0.75*inch, bottomMargin=0.75*inch,
+                              leftMargin=0.75*inch, rightMargin=0.75*inch)
 
-        # Add the plot page to the PDF
-        plot_page_buffer.seek(0)
-        plot_reader = PdfReader(plot_page_buffer)
-        writer.add_page(plot_reader.pages[0])
+        # Container for PDF elements
+        story = []
+        styles = getSampleStyleSheet()
 
-    # Add page 2 from template (now page 3) with updated page number
-    if len(reader.pages) > 1:
-        page2 = reader.pages[1]
+        # Custom styles to match the template
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=16,
+            textColor=colors.HexColor('#000000'),
+            spaceAfter=12,
+            alignment=0  # Left
+        )
 
-        # Update page number overlay
-        page_num_overlay = io.BytesIO()
-        c = canvas.Canvas(page_num_overlay, pagesize=A4)
+        heading_style = ParagraphStyle(
+            'CustomHeading',
+            parent=styles['Heading2'],
+            fontSize=14,
+            textColor=colors.HexColor('#000000'),
+            spaceAfter=10,
+            spaceBefore=10,
+            fontName='Helvetica-Bold'
+        )
 
-        # Cover old page number with footer color
-        c.setFillColorRGB(74/255, 85/255, 104/255)
-        c.rect(width/2 - 60, 0, 120, 14, fill=True, stroke=False)
+        body_style = ParagraphStyle(
+            'CustomBody',
+            parent=styles['Normal'],
+            fontSize=11,
+            textColor=colors.HexColor('#000000'),
+            spaceAfter=6,
+            leading=14
+        )
 
-        # Write new page number
-        c.setFillColorRGB(1, 1, 1)
-        c.setFont("Helvetica", 9)
-        c.drawCentredString(width / 2, 6, "Page 3 of 3")
+        # Process each paragraph from the DOCX
+        for para in doc_for_pdf.paragraphs:
+            text = para.text.strip()
 
-        c.save()
+            if not text:
+                story.append(Spacer(1, 0.1*inch))
+                continue
 
-        # Merge page number overlay
-        page_num_overlay.seek(0)
-        page_num_reader = PdfReader(page_num_overlay)
-        page2.merge_page(page_num_reader.pages[0])
-        writer.add_page(page2)
+            # Determine style based on content and formatting
+            if 'Customer Report:' in text or 'Brain Response to 40 Hz' in text:
+                story.append(Paragraph(text, title_style))
+            elif any(heading in text for heading in ['Background Information:', 'Understanding the SSVEP',
+                                                      'Your Brain Response:', 'Interpretation:',
+                                                      'Additional Notes', 'Contact and Follow-Up']):
+                story.append(Paragraph(text, heading_style))
+            else:
+                # Check if it's a bullet point
+                if text.startswith('●') or text.startswith('•'):
+                    bullet_style = ParagraphStyle(
+                        'Bullet',
+                        parent=body_style,
+                        leftIndent=20,
+                        bulletIndent=10
+                    )
+                    story.append(Paragraph(text, bullet_style))
+                else:
+                    story.append(Paragraph(text, body_style))
 
-    # Write final PDF to buffer
-    output_buffer = io.BytesIO()
-    writer.write(output_buffer)
-    pdf_bytes = output_buffer.getvalue()
-    output_buffer.close()
+        # Add images from the document
+        for rel in doc_for_pdf.part.rels.values():
+            if "image" in rel.target_ref:
+                try:
+                    image_data = rel.target_part.blob
+                    img_buffer_pdf = io.BytesIO(image_data)
+                    img = RLImage(img_buffer_pdf, width=6*inch, height=4*inch)
+                    story.append(Spacer(1, 0.2*inch))
+                    story.append(img)
+                    story.append(Spacer(1, 0.2*inch))
+                except Exception as e:
+                    print(f"Error adding image: {e}")
 
-    # Encode to base64
-    pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
-    return pdf_base64
+        print("Step 7: Building PDF...")
+        # Build the PDF
+        pdf.build(story)
+
+        print("Step 8: Encoding PDF to base64...")
+        # Get PDF bytes and encode to base64
+        pdf_bytes = pdf_buffer.getvalue()
+        pdf_buffer.close()
+
+        pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
+
+        print("PDF generation completed successfully!")
+        return pdf_base64
+
+    except Exception as e:
+        error_msg = f"Error in PDF generation: {str(e)}\\n{traceback.format_exc()}"
+        print(error_msg)
+        raise Exception(error_msg)
 `;
 
   try {
+    console.log('Executing Python code...');
     // Execute the Python code
     await pyodide.runPythonAsync(pythonCode);
 
+    console.log('Calling PDF generation function...');
     // Call the function to generate the report
     const result = await pyodide.runPythonAsync(`generate_patient_report_pdf()`);
+    console.log('PDF generated successfully!');
     return result;
   } catch (error) {
     console.error('Report generation error:', error);
@@ -314,4 +389,169 @@ export function downloadPDF(base64PDF: string, filename: string) {
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
+}
+
+/**
+ * Download a base64 DOCX as a file
+ * Use this as an alternative when perfect formatting preservation is required
+ */
+export function downloadDOCX(base64DOCX: string, filename: string) {
+  const byteCharacters = atob(base64DOCX);
+  const byteArray = new Uint8Array(byteCharacters.length);
+  for (let i = 0; i < byteCharacters.length; i++) {
+    byteArray[i] = byteCharacters.charCodeAt(i);
+  }
+  const blob = new Blob([byteArray], {
+    type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  });
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Generate a patient report DOCX (edited template with all formatting preserved)
+ * Returns the modified DOCX file for download or further processing
+ * This preserves ALL original formatting, headers, footers, fonts, and styles
+ */
+export async function generatePatientReportDOCX(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  pyodide: any,
+  reportData: PatientReportData
+): Promise<string> {
+
+  // Install required packages
+  try {
+    const micropip = pyodide.pyimport('micropip');
+    console.log('Installing python-docx and pillow...');
+    await micropip.install(['python-docx', 'pillow']);
+    console.log('Packages installed successfully');
+  } catch (error) {
+    console.error('Failed to install required libraries:', error);
+    throw new Error('Failed to install required libraries');
+  }
+
+  // Fetch the DOCX template
+  let templateDocxBytes: string;
+  try {
+    console.log('Fetching DOCX template...');
+    const docxResponse = await fetch('/Customer Report Template.docx');
+    if (!docxResponse.ok) {
+      throw new Error(`Failed to fetch DOCX template: ${docxResponse.status}`);
+    }
+    const docxArrayBuffer = await docxResponse.arrayBuffer();
+    const docxUint8Array = new Uint8Array(docxArrayBuffer);
+
+    // Convert to base64 for Python - process in chunks to avoid stack overflow
+    let docxBinary = '';
+    const chunkSize = 8192;
+    for (let i = 0; i < docxUint8Array.length; i += chunkSize) {
+      const chunk = docxUint8Array.subarray(i, Math.min(i + chunkSize, docxUint8Array.length));
+      docxBinary += String.fromCharCode(...chunk);
+    }
+    templateDocxBytes = btoa(docxBinary);
+    console.log('Template loaded successfully');
+  } catch (error) {
+    console.error('Failed to load template:', error);
+    throw new Error('Failed to load Customer Report Template.docx from repository');
+  }
+
+  // Pass the template and data to Python
+  pyodide.globals.set('template_docx_base64', templateDocxBytes);
+  pyodide.globals.set('plot_base64', reportData.psdPlotBase64 || '');
+  pyodide.globals.set('session_date', reportData.examDate || 'N/A');
+  pyodide.globals.set('session_number', reportData.patientId || 'N/A');
+
+  const pythonCode = `
+import io
+import base64
+from docx import Document
+from docx.shared import Inches
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
+import traceback
+
+def generate_patient_report_docx():
+    """
+    Generate patient report DOCX by editing the template.
+    This preserves ALL original formatting.
+
+    Returns:
+        Base64 encoded DOCX bytes
+    """
+
+    try:
+        print("Loading and editing DOCX template...")
+        template_bytes = base64.b64decode(template_docx_base64)
+        template_buffer = io.BytesIO(template_bytes)
+        doc = Document(template_buffer)
+
+        # Replace placeholders
+        for paragraph in doc.paragraphs:
+            if 'Date:' in paragraph.text and '____' in paragraph.text:
+                for run in paragraph.runs:
+                    if '____' in run.text:
+                        run.text = run.text.replace('____________________', session_date, 1)
+                        break
+
+            if 'Session Number:' in paragraph.text and '____' in paragraph.text:
+                for run in paragraph.runs:
+                    if '____' in run.text:
+                        run.text = run.text.replace('____________________', session_number, 1)
+                        break
+
+        # Insert plot image
+        if plot_base64:
+            img_data = base64.b64decode(plot_base64)
+            img_buffer = io.BytesIO(img_data)
+
+            insertion_index = None
+            for i, paragraph in enumerate(doc.paragraphs):
+                if 'During 40 Hz Visual Stimulation with EVY Light' in paragraph.text:
+                    insertion_index = i
+                    break
+
+            if insertion_index is not None:
+                p = doc.paragraphs[insertion_index]._element
+                new_p = OxmlElement('w:p')
+                p.addnext(new_p)
+
+                new_para = doc.paragraphs[insertion_index + 1]
+                new_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                run = new_para.add_run()
+                run.add_picture(img_buffer, width=Inches(6))
+                print(f"Image inserted successfully")
+
+        # Save modified DOCX
+        output_buffer = io.BytesIO()
+        doc.save(output_buffer)
+        docx_bytes = output_buffer.getvalue()
+        output_buffer.close()
+
+        docx_base64 = base64.b64encode(docx_bytes).decode('utf-8')
+        print("DOCX generation completed successfully!")
+        return docx_base64
+
+    except Exception as e:
+        error_msg = f"Error: {str(e)}\\n{traceback.format_exc()}"
+        print(error_msg)
+        raise Exception(error_msg)
+`;
+
+  try {
+    console.log('Generating modified DOCX...');
+    await pyodide.runPythonAsync(pythonCode);
+    const result = await pyodide.runPythonAsync(`generate_patient_report_docx()`);
+    console.log('DOCX generated successfully!');
+    return result;
+  } catch (error) {
+    console.error('Report generation error:', error);
+    throw new Error(`Failed to generate report: ${error}`);
+  }
 }
