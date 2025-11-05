@@ -66,7 +66,7 @@ export async function generatePatientReportPDF(
   // Install required packages
   try {
     const micropip = pyodide.pyimport('micropip');
-    await micropip.install(['reportlab', 'pypdf']);
+    await micropip.install(['reportlab', 'pypdf', 'pillow']);
   } catch (error) {
     console.error('Failed to install PDF libraries:', error);
     throw new Error('Failed to install required PDF libraries');
@@ -109,6 +109,8 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import inch
 from reportlab.pdfgen import canvas
 from reportlab.lib import colors
+from PIL import Image
+from reportlab.lib.utils import ImageReader
 
 def generate_patient_report_pdf():
     """
@@ -155,9 +157,13 @@ def generate_patient_report_pdf():
         c = canvas.Canvas(plot_page_buffer, pagesize=A4)
         width, height = A4
 
-        # Decode the plot image
+        # Decode the plot image and open with PIL
         img_data = base64.b64decode(plot_base64)
         img_buffer = io.BytesIO(img_data)
+        pil_image = Image.open(img_buffer)
+
+        # Use ImageReader for reportlab compatibility
+        img_reader = ImageReader(pil_image)
 
         # Draw the plot centered on the page
         # Plot dimensions: make it large but leave margins
@@ -168,7 +174,7 @@ def generate_patient_report_pdf():
         x = 1*inch
         y = height - 5.5*inch  # From top
 
-        c.drawImage(img_buffer, x, y, width=plot_width, height=plot_height,
+        c.drawImage(img_reader, x, y, width=plot_width, height=plot_height,
                     preserveAspectRatio=True, anchor='sw')
 
         c.save()
