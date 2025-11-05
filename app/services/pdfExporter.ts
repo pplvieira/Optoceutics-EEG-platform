@@ -63,291 +63,138 @@ export async function generatePatientReportPDF(
   reportData: PatientReportData
 ): Promise<string> {
 
-  // Check if template file exists
-  // NOTE: Template files should be placed in /public/templates/
-  // - Customer Report Template.docx OR
-  // - Customer Report Template.pdf
+  // Install required packages
+  try {
+    const micropip = pyodide.pyimport('micropip');
+    await micropip.install(['reportlab', 'pypdf']);
+  } catch (error) {
+    console.error('Failed to install PDF libraries:', error);
+    throw new Error('Failed to install required PDF libraries');
+  }
+
+  // First, fetch the template PDF from the repository
+  let templatePdfBytes: string;
+  try {
+    const response = await fetch('/Customer Report Template.pdf');
+    if (!response.ok) {
+      throw new Error(`Failed to fetch template: ${response.status}`);
+    }
+    const arrayBuffer = await response.arrayBuffer();
+    const uint8Array = new Uint8Array(arrayBuffer);
+    // Convert to base64 for Python
+    templatePdfBytes = btoa(String.fromCharCode(...uint8Array));
+  } catch (error) {
+    console.error('Failed to load template PDF:', error);
+    throw new Error('Failed to load Customer Report Template.pdf from repository');
+  }
+
+  // Pass the template and plot data to Python
+  pyodide.globals.set('template_pdf_base64', templatePdfBytes);
+  pyodide.globals.set('plot_base64', reportData.psdPlotBase64 || '');
+  pyodide.globals.set('session_date', reportData.examDate || '');
+  pyodide.globals.set('session_number', reportData.patientId || '');
 
   const pythonCode = `
 import io
 import base64
-from reportlab.lib.pagesizes import letter, A4
-from reportlab.lib import colors
+from pypdf import PdfReader, PdfWriter
+from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import inch
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, Image as RLImage
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_JUSTIFY
-from datetime import datetime
+from reportlab.pdfgen import canvas
+from reportlab.lib import colors
 
-def generate_patient_report_pdf(report_data):
+def generate_patient_report_pdf():
     """
-    Generate a patient report PDF based on the Customer Report Template
-
-    Args:
-        report_data: Dictionary containing all patient and analysis information
+    Edit the Customer Report Template PDF by inserting the PSD plot
 
     Returns:
         Base64 encoded PDF bytes
     """
 
-    buffer = io.BytesIO()
+    # Decode the template PDF from base64
+    template_bytes = base64.b64decode(template_pdf_base64)
+    template_buffer = io.BytesIO(template_bytes)
 
-    # Create PDF document (A4 size)
-    doc = SimpleDocTemplate(
-        buffer,
-        pagesize=A4,
-        topMargin=0.75*inch,
-        bottomMargin=0.75*inch,
-        leftMargin=0.75*inch,
-        rightMargin=0.75*inch
-    )
+    # Read the template PDF (2 pages)
+    reader = PdfReader(template_buffer)
+    writer = PdfWriter()
 
-    # Container for PDF elements
-    story = []
+    # Add page 1 from template (with Date and Session Number filled)
+    page1 = reader.pages[0]
 
-    # Get stylesheet
-    styles = getSampleStyleSheet()
+    # Create overlay for page 1 with Date and Session Number
+    overlay_buffer = io.BytesIO()
+    c = canvas.Canvas(overlay_buffer, pagesize=A4)
 
-    # Custom styles matching the template
-    title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Heading1'],
-        fontSize=24,
-        textColor=colors.HexColor('#1a56db'),
-        spaceAfter=20,
-        alignment=TA_CENTER,
-        fontName='Helvetica-Bold'
-    )
+    # Fill in Date field (positioned after "Date: ____")
+    # Coordinates are approximate - adjust based on template
+    c.setFont("Helvetica", 11)
+    c.drawString(130, 770, session_date)  # Date position
 
-    heading_style = ParagraphStyle(
-        'CustomHeading',
-        parent=styles['Heading2'],
-        fontSize=14,
-        textColor=colors.HexColor('#1a56db'),
-        spaceAfter=10,
-        spaceBefore=15,
-        fontName='Helvetica-Bold'
-    )
+    # Fill in Session Number field
+    c.drawString(280, 755, session_number)  # Session Number position
 
-    subheading_style = ParagraphStyle(
-        'CustomSubHeading',
-        parent=styles['Heading3'],
-        fontSize=12,
-        textColor=colors.HexColor('#333333'),
-        spaceAfter=8,
-        spaceBefore=10,
-        fontName='Helvetica-Bold'
-    )
+    c.save()
 
-    normal_style = ParagraphStyle(
-        'CustomNormal',
-        parent=styles['Normal'],
-        fontSize=10,
-        textColor=colors.HexColor('#333333'),
-        alignment=TA_JUSTIFY
-    )
+    # Merge overlay with page 1
+    overlay_buffer.seek(0)
+    overlay_reader = PdfReader(overlay_buffer)
+    page1.merge_page(overlay_reader.pages[0])
+    writer.add_page(page1)
 
-    # ===== TITLE =====
-    title = Paragraph("EEG Analysis Report", title_style)
-    story.append(title)
-    story.append(Spacer(1, 0.3*inch))
+    # Create a new page for the PSD plot (insert between page 1 and 2)
+    if plot_base64:
+        plot_page_buffer = io.BytesIO()
+        c = canvas.Canvas(plot_page_buffer, pagesize=A4)
+        width, height = A4
 
-    # ===== PATIENT INFORMATION =====
-    story.append(Paragraph("Patient Information", heading_style))
+        # Decode the plot image
+        img_data = base64.b64decode(plot_base64)
+        img_buffer = io.BytesIO(img_data)
 
-    patient_data = [
-        ['Field', 'Value'],
-        ['Patient Name', report_data.get('patientName', 'N/A')],
-        ['Patient ID', report_data.get('patientId', 'N/A')],
-        ['Date of Birth', report_data.get('dateOfBirth', 'N/A')],
-        ['Exam Date', report_data.get('examDate', datetime.now().strftime('%Y-%m-%d'))],
-    ]
+        # Draw the plot centered on the page
+        # Plot dimensions: make it large but leave margins
+        plot_width = width - 2*inch
+        plot_height = 4.5*inch
 
-    patient_table = Table(patient_data, colWidths=[2*inch, 4*inch])
-    patient_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1a56db')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 11),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black),
-        ('FONTNAME', (0, 1), (0, -1), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 1), (-1, -1), 10),
-    ]))
+        # Position: centered horizontally, starting from top with margin
+        x = 1*inch
+        y = height - 5.5*inch  # From top
 
-    story.append(patient_table)
-    story.append(Spacer(1, 0.3*inch))
+        c.drawImage(img_buffer, x, y, width=plot_width, height=plot_height,
+                    preserveAspectRatio=True, anchor='sw')
 
-    # ===== RECORDING INFORMATION =====
-    story.append(Paragraph("Recording Information", heading_style))
+        c.save()
 
-    recording_data = [
-        ['Parameter', 'Value'],
-        ['Filename', report_data.get('fileName', 'N/A')],
-        ['Recording Date', report_data.get('recordingDate', 'N/A')],
-        ['Duration', f"{report_data.get('duration', 0):.2f} seconds"],
-        ['Sampling Rate', f"{report_data.get('samplingRate', 0):.2f} Hz"],
-        ['Number of Channels', str(report_data.get('numChannels', 0))],
-        ['Selected Channels', ', '.join(report_data.get('selectedChannels', []))],
-    ]
+        # Add plot page to writer
+        plot_page_buffer.seek(0)
+        plot_reader = PdfReader(plot_page_buffer)
+        writer.add_page(plot_reader.pages[0])
 
-    recording_table = Table(recording_data, colWidths=[2*inch, 4*inch])
-    recording_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#10b981')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 11),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.lightgreen),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black),
-        ('FONTNAME', (0, 1), (0, -1), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 1), (-1, -1), 10),
-    ]))
+    # Add page 2 from template (Interpretation and rest)
+    if len(reader.pages) > 1:
+        page2 = reader.pages[1]
+        writer.add_page(page2)
 
-    story.append(recording_table)
-    story.append(Spacer(1, 0.3*inch))
-
-    # ===== ANALYSIS TIME FRAME =====
-    if report_data.get('timeFrame'):
-        story.append(Paragraph("Analysis Time Frame", heading_style))
-
-        time_frame = report_data['timeFrame']
-        time_data = [
-            ['Parameter', 'Value'],
-            ['Start Time', f"{time_frame.get('start', 0):.3f} seconds"],
-            ['End Time', f"{time_frame.get('end', 0):.3f} seconds"],
-            ['Duration', f"{time_frame.get('end', 0) - time_frame.get('start', 0):.3f} seconds"],
-        ]
-
-        if time_frame.get('start_real_time'):
-            time_data.append(['Real-World Start', time_frame['start_real_time']])
-        if time_frame.get('end_real_time'):
-            time_data.append(['Real-World End', time_frame['end_real_time']])
-
-        time_table = Table(time_data, colWidths=[2*inch, 4*inch])
-        time_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f59e0b')),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 11),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.lightyellow),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
-            ('FONTNAME', (0, 1), (0, -1), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 1), (-1, -1), 10),
-        ]))
-
-        story.append(time_table)
-        story.append(Spacer(1, 0.3*inch))
-
-    # ===== PSD ANALYSIS SECTION =====
-    # This is where the plot goes for "During 40 Hz Visual Stimulation with EVY Light"
-    story.append(PageBreak())
-    story.append(Paragraph("Power Spectral Density Analysis", heading_style))
-    story.append(Paragraph("During 40 Hz Visual Stimulation with EVY Light", subheading_style))
-
-    # Analysis parameters
-    psd_method = report_data.get('psdMethod', 'welch').capitalize()
-    freq_range = report_data.get('frequencyRange', {})
-
-    analysis_info = Paragraph(
-        f"PSD computed using {psd_method} method. "
-        f"Frequency range: {freq_range.get('min', 0)}-{freq_range.get('max', 100)} Hz. "
-        f"Analysis performed on channels: {', '.join(report_data.get('selectedChannels', []))}.",
-        normal_style
-    )
-    story.append(analysis_info)
-    story.append(Spacer(1, 0.2*inch))
-
-    # Insert PSD plot if available
-    if report_data.get('psdPlotBase64'):
-        try:
-            # Decode base64 image
-            img_data = base64.b64decode(report_data['psdPlotBase64'])
-            img_buffer = io.BytesIO(img_data)
-
-            # Add image to PDF (full page width)
-            psd_image = RLImage(img_buffer, width=6.5*inch, height=4*inch)
-            story.append(psd_image)
-            story.append(Spacer(1, 0.2*inch))
-
-        except Exception as e:
-            error_para = Paragraph(
-                f"Error loading PSD plot: {str(e)}",
-                normal_style
-            )
-            story.append(error_para)
-    else:
-        no_plot_para = Paragraph(
-            "No PSD plot available. Please generate PSD analysis first.",
-            normal_style
-        )
-        story.append(no_plot_para)
-
-    # ===== SUMMARY =====
-    story.append(Spacer(1, 0.3*inch))
-    story.append(Paragraph("Analysis Summary", heading_style))
-
-    summary_text = f"""
-    This report contains EEG analysis results for the recording "{report_data.get('fileName', 'N/A')}".
-    The analysis was performed using Power Spectral Density ({psd_method} method) to assess
-    brain activity patterns during 40 Hz visual stimulation.
-    """
-
-    if report_data.get('timeFrame'):
-        tf = report_data['timeFrame']
-        duration = tf.get('end', 0) - tf.get('start', 0)
-        summary_text += f"""<br/><br/>
-        The analysis focused on a {duration:.2f}-second time window from {tf.get('start', 0):.2f}s
-        to {tf.get('end', 0):.2f}s of the recording.
-        """
-
-    if report_data.get('annotations'):
-        summary_text += f"""<br/><br/>
-        The recording contains {len(report_data['annotations'])} annotations marking
-        significant events during the session.
-        """
-
-    summary_para = Paragraph(summary_text, normal_style)
-    story.append(summary_para)
-
-    # ===== FOOTER =====
-    story.append(Spacer(1, 0.5*inch))
-    footer_style = ParagraphStyle(
-        'Footer',
-        parent=styles['Normal'],
-        fontSize=8,
-        textColor=colors.grey,
-        alignment=TA_CENTER
-    )
-    footer_text = f"Report generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Optoceutics EEG Platform"
-    footer_para = Paragraph(footer_text, footer_style)
-    story.append(footer_para)
-
-    # Build PDF
-    doc.build(story)
+    # Write final PDF to buffer
+    output_buffer = io.BytesIO()
+    writer.write(output_buffer)
 
     # Get PDF bytes and encode to base64
-    pdf_bytes = buffer.getvalue()
-    buffer.close()
+    pdf_bytes = output_buffer.getvalue()
+    output_buffer.close()
 
     pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
 
     return pdf_base64
-
-# Execute
-import json
-report_data_dict = json.loads('${JSON.stringify(reportData)}')
-pdf_base64_result = generate_patient_report_pdf(report_data_dict)
-pdf_base64_result
 `;
 
   try {
-    const result = await pyodide.runPythonAsync(pythonCode);
+    // First, execute the Python code to define the function
+    await pyodide.runPythonAsync(pythonCode);
+
+    // Now call the function (all data already set in globals)
+    const result = await pyodide.runPythonAsync(`generate_patient_report_pdf()`);
     return result;
   } catch (error) {
     console.error('PDF generation error:', error);
