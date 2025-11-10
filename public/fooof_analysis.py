@@ -141,7 +141,7 @@ def analyze_fooof_spectrum(freqs, psd, channel_name, parameters):
         }
 
 
-def create_fooof_plot(results_list, freq_range, show_aperiodic=True, show_periodic=True):
+def create_fooof_plot(results_list, freq_range, show_aperiodic=True, show_periodic=True, use_resutil_style=False):
     """
     Create a single comprehensive plot showing FOOOF results for all channels.
 
@@ -155,11 +155,25 @@ def create_fooof_plot(results_list, freq_range, show_aperiodic=True, show_period
         Whether to show the aperiodic (1/f) component line
     show_periodic : bool
         Whether to show the periodic component as filled area
+    use_resutil_style : bool
+        Whether to use resutil custom Optoceutics styling
 
     Returns:
     --------
     str : Base64 encoded PNG image
     """
+    # Apply resutil styling if requested
+    if use_resutil_style:
+        try:
+            import resutil
+            resutil.set_oc_style()
+            resutil.set_oc_font()
+            print("Applied Optoceutics custom styling (resutil)")
+        except ImportError:
+            print("Resutil not available, using default matplotlib styling")
+        except Exception as e:
+            print(f"Failed to apply resutil styling: {e}")
+
     num_channels = len(results_list)
 
     # Create figure with subplots (one row per channel) - increased height to 5.5 per channel
@@ -329,12 +343,14 @@ def run_fooof_analysis(edf_reader, selected_channels, parameters,
         freq_range = parameters.get('freq_range', [1, 50])
         show_aperiodic = parameters.get('show_aperiodic', True)
         show_periodic = parameters.get('show_periodic', True)
+        use_resutil_style = parameters.get('use_resutil_style', False)
 
         # Debug: verify parameters
         print(f"\n[FOOOF Analysis Parameters]")
         print(f"  Received parameters: {list(parameters.keys())}")
         print(f"  show_aperiodic: {show_aperiodic} (type: {type(show_aperiodic)})")
         print(f"  show_periodic: {show_periodic} (type: {type(show_periodic)})")
+        print(f"  use_resutil_style: {use_resutil_style} (type: {type(use_resutil_style)})")
         print(f"  freq_range: {freq_range}")
 
         # Get channel information
@@ -386,8 +402,8 @@ def run_fooof_analysis(edf_reader, selected_channels, parameters,
                     'success': False
                 }
 
-        # Create plot with display options
-        plot_base64 = create_fooof_plot(results_list, freq_range, show_aperiodic, show_periodic)
+        # Create plot with display options and styling
+        plot_base64 = create_fooof_plot(results_list, freq_range, show_aperiodic, show_periodic, use_resutil_style)
 
         return json.dumps({
             'analysis_type': 'fooof',

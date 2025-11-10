@@ -36,13 +36,20 @@ export interface PatientReportData {
     end_real_time?: string;
   };
 
-  // PSD Analysis Results
+  // PSD Analysis Results (legacy - kept for backward compatibility)
   psdMethod: 'welch' | 'periodogram';
   frequencyRange: {
     min: number;
     max: number;
   };
-  psdPlotBase64?: string; // Base64 encoded PNG image of the PSD plot
+  psdPlotBase64?: string; // Base64 encoded PNG image of the PSD plot (legacy)
+
+  // Multi-plot support (new)
+  plots?: Array<{
+    plotBase64: string;
+    caption: string;
+    analysisType: string;
+  }>;
 
   // Additional metadata
   annotations?: Array<{
@@ -511,15 +518,20 @@ export async function generatePatientReportDOCX(
 
   // Pass the template and data to Python
   pyodide.globals.set('template_docx_base64', templateDocxBytes);
-  pyodide.globals.set('plot_base64', reportData.psdPlotBase64 || '');
+  pyodide.globals.set('plot_base64', reportData.psdPlotBase64 || ''); // Legacy field
   pyodide.globals.set('session_date', reportData.examDate || 'N/A');
   pyodide.globals.set('session_number', reportData.patientId || 'N/A');
+
+  // Pass multi-plot data (new)
+  const plotsData = reportData.plots || [];
+  pyodide.globals.set('plots_data', JSON.stringify(plotsData));
 
   const pythonCode = `
 import io
 import base64
+import json
 from docx import Document
-from docx.shared import Inches
+from docx.shared import Inches, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 import traceback
@@ -528,6 +540,7 @@ def generate_patient_report_docx():
     """
     Generate patient report DOCX by editing the template.
     This preserves ALL original formatting.
+    Supports multiple plots with captions.
 
     Returns:
         Base64 encoded DOCX bytes
@@ -553,8 +566,65 @@ def generate_patient_report_docx():
                         run.text = run.text.replace('____________________', session_number, 1)
                         break
 
-        # Insert plot image
-        if plot_base64:
+        # Parse plots data
+        plots = json.loads(plots_data) if plots_data else []
+
+        # Insert plots (new multi-plot support)
+        if plots and len(plots) > 0:
+            print(f"Inserting {len(plots)} plot(s)...")
+
+            # Find insertion point
+            insertion_index = None
+            for i, paragraph in enumerate(doc.paragraphs):
+                if 'During 40 Hz Visual Stimulation with EVY Light' in paragraph.text:
+                    insertion_index = i
+                    break
+
+            if insertion_index is not None:
+                # Insert all plots sequentially
+                current_index = insertion_index
+                for plot_idx, plot in enumerate(plots):
+                    plot_base64_data = plot.get('plotBase64', '')
+                    plot_caption = plot.get('caption', f'Analysis Plot {plot_idx + 1}')
+
+                    if plot_base64_data:
+                        # Decode image
+                        img_data = base64.b64decode(plot_base64_data)
+                        img_buffer = io.BytesIO(img_data)
+
+                        # Add new paragraph for image
+                        p = doc.paragraphs[current_index]._element
+                        new_p = OxmlElement('w:p')
+                        p.addnext(new_p)
+
+                        new_para = doc.paragraphs[current_index + 1]
+                        new_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        run = new_para.add_run()
+                        run.add_picture(img_buffer, width=Inches(6))
+
+                        # Add caption below image
+                        caption_p = OxmlElement('w:p')
+                        new_para._element.addnext(caption_p)
+
+                        caption_para = doc.paragraphs[current_index + 2]
+                        caption_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        caption_run = caption_para.add_run(plot_caption)
+                        caption_run.font.size = Pt(10)
+                        caption_run.font.italic = True
+
+                        # Add spacing paragraph
+                        if plot_idx < len(plots) - 1:
+                            spacing_p = OxmlElement('w:p')
+                            caption_para._element.addnext(spacing_p)
+                            current_index += 4  # Account for original + image + caption + spacing
+                        else:
+                            current_index += 3  # No spacing after last plot
+
+                        print(f"Plot {plot_idx + 1} inserted: {plot_caption}")
+
+        # Backward compatibility: if no plots array, use legacy single plot
+        elif plot_base64:
+            print("Using legacy single plot mode...")
             img_data = base64.b64decode(plot_base64)
             img_buffer = io.BytesIO(img_data)
 
@@ -573,7 +643,7 @@ def generate_patient_report_docx():
                 new_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 run = new_para.add_run()
                 run.add_picture(img_buffer, width=Inches(6))
-                print(f"Image inserted successfully")
+                print("Legacy plot inserted successfully")
 
         # Save modified DOCX
         output_buffer = io.BytesIO()
