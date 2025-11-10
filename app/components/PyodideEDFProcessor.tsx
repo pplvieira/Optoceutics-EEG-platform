@@ -248,13 +248,17 @@ export default function PyodideEDFProcessor() {
         setLoadingMessage('FOOOF analysis module not available');
       }
 
-      // Install resutil for custom Optoceutics plot styling
+      // Install resutil for custom Optoceutics plot styling from local wheel
       try {
         setLoadingMessage('Installing resutil (Optoceutics styling library)...');
         const micropip = pyodide.pyimport("micropip");
-        await micropip.install(['resutil']);
+
+        // Install from local wheel file to avoid dependency conflicts
+        // Use deps=False to skip dependency resolution (google-auth conflict)
+        await micropip.install('/python-packages/resutil-0.1.18-py3-none-any.whl', {deps: false});
+
         setLoadingMessage('Resutil library installed successfully');
-        console.log('Resutil library installed for custom plot styling');
+        console.log('Resutil library installed from local wheel for custom plot styling');
       } catch (error) {
         console.warn('Resutil installation failed (will use default matplotlib styling):', error);
         setLoadingMessage('Using default matplotlib styling');
