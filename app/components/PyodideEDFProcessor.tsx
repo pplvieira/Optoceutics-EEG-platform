@@ -251,6 +251,13 @@ export default function PyodideEDFProcessor() {
       // Install resutil for custom Optoceutics plot styling from local wheel
       // Manual installation to avoid dependency conflicts
       try {
+        setLoadingMessage('Installing resutil dependencies...');
+        const micropip = pyodide.pyimport("micropip");
+
+        // First install rich (required dependency for resutil)
+        await micropip.install(['rich']);
+        console.log('Rich library installed successfully');
+
         setLoadingMessage('Installing resutil (Optoceutics styling library)...');
 
         // Fetch the wheel file
@@ -295,7 +302,7 @@ except ImportError as e:
 `);
 
         setLoadingMessage('Resutil library installed successfully');
-        console.log('Resutil library installed manually from local wheel (no dependencies)');
+        console.log('Resutil library installed manually from local wheel');
       } catch (error) {
         console.warn('Resutil installation failed (will use default matplotlib styling):', error);
         setLoadingMessage('Using default matplotlib styling');
