@@ -223,6 +223,21 @@ export default function PyodideEDFProcessor() {
         setLoadingMessage('FOOOF library not available');
       }
 
+      // Load FOOOF analysis module from external file
+      try {
+        setLoadingMessage('Loading FOOOF analysis module...');
+        const fooofResponse = await fetch('/fooof_analysis.py');
+        if (!fooofResponse.ok) {
+          throw new Error(`Failed to load fooof_analysis.py: ${fooofResponse.statusText}`);
+        }
+        const fooofCode = await fooofResponse.text();
+        await pyodide.runPython(fooofCode);
+        console.log('FOOOF analysis module loaded successfully');
+      } catch (error) {
+        console.warn('Failed to load FOOOF analysis module:', error);
+        setLoadingMessage('FOOOF analysis module not available');
+      }
+
       // Setup Python environment
       setLoadingMessage('Setting up analysis environment...');
       await pyodide.runPython(`
@@ -239,15 +254,6 @@ import json
 from datetime import datetime
 import warnings
 warnings.filterwarnings('ignore')
-
-# Try to import FOOOF for spectral parameterization
-FOOOF_AVAILABLE = False
-try:
-    from fooof import FOOOF
-    FOOOF_AVAILABLE = True
-    print("FOOOF library available for spectral parameterization")
-except ImportError:
-    print("FOOOF library not available")
 
 # Try to import MNE first, then pyedflib, with pure Python fallback
 MNE_AVAILABLE = False
@@ -1617,15 +1623,8 @@ def analyze_psd(edf_reader, parameters):
 def analyze_fooof(edf_reader, parameters):
     """
     FOOOF (Fitting Oscillations & One Over F) Spectral Parameterization
-    Separates periodic and aperiodic components from power spectra
+    Wrapper function that calls the external fooof_analysis module
     """
-    if not FOOOF_AVAILABLE:
-        return json.dumps({
-            'analysis_type': 'fooof',
-            'success': False,
-            'error': 'FOOOF library not available. Please ensure fooof is installed.'
-        })
-
     # Convert parameters to Python dict to avoid JsProxy issues
     try:
         if hasattr(parameters, 'to_py'):
@@ -1648,186 +1647,21 @@ def analyze_fooof(edf_reader, parameters):
             'noverlap_proportion': 0.5
         }
 
-    # Extract parameters
-    freq_range = params.get('freq_range', [1, 50])
-    peak_width_limits = params.get('peak_width_limits', [0.5, 12])
-    max_n_peaks = params.get('max_n_peaks', 6)
-    min_peak_height = params.get('min_peak_height', 0.1)
-    aperiodic_mode = params.get('aperiodic_mode', 'fixed')
-    nperseg_seconds = params.get('nperseg_seconds', 4.0)
-    noverlap_proportion = params.get('noverlap_proportion', 0.5)
-
-    all_channels = get_channel_names(edf_reader)
-
-    # Use selected channels
+    # Get selected channels
     try:
-        selected_channels = list(js_selected_channels) if 'js_selected_channels' in globals() else all_channels[:4]
+        selected_channels = list(js_selected_channels) if 'js_selected_channels' in globals() else []
     except:
-        selected_channels = all_channels[:4]
+        selected_channels = []
 
-    selected_channels = [ch for ch in selected_channels if ch in all_channels]
-    num_channels = min(4, len(selected_channels))
-    selected_channels = selected_channels[:num_channels]
-
-    sample_rate = get_sample_frequency(edf_reader)
-
-    # Calculate PSD parameters
-    nperseg = int(nperseg_seconds * sample_rate)
-    noverlap = int(noverlap_proportion * nperseg)
-
-    # Store results for each channel
-    fooof_results = {}
-
-    # Create figure with subplots for each channel
-    num_rows = num_channels
-    fig = plt.figure(figsize=(14, 4 * num_rows))
-
-    for idx, ch_name in enumerate(selected_channels):
-        ch_idx = all_channels.index(ch_name)
-        signal_data = get_signal_data(edf_reader, ch_idx)
-
-        # Compute PSD using Welch method
-        freqs, psd = signal.welch(signal_data, fs=sample_rate, nperseg=nperseg,
-                                 noverlap=noverlap, window='hann')
-
-        # Filter frequency range for FOOOF
-        freq_mask = (freqs >= freq_range[0]) & (freqs <= freq_range[1])
-        freqs_fit = freqs[freq_mask]
-        psd_fit = psd[freq_mask]
-
-        # Initialize and fit FOOOF model
-        try:
-            fm = FOOOF(
-                peak_width_limits=peak_width_limits,
-                max_n_peaks=max_n_peaks,
-                min_peak_height=min_peak_height,
-                aperiodic_mode=aperiodic_mode,
-                verbose=False
-            )
-            fm.fit(freqs_fit, psd_fit)
-
-            # Extract results
-            aperiodic_params = fm.aperiodic_params_
-            peak_params = fm.peak_params_
-            r_squared = fm.r_squared_
-            error = fm.error_
-
-            # Get FOOOF model components
-            model_fit = fm.fooofed_spectrum_
-            aperiodic_fit = fm._ap_fit
-
-            # Find alpha peaks (8-12 Hz)
-            alpha_peaks = []
-            if len(peak_params) > 0:
-                for peak in peak_params:
-                    center_freq, power, bandwidth = peak
-                    if 8 <= center_freq <= 12:
-                        alpha_peaks.append({
-                            'frequency': float(center_freq),
-                            'power': float(power),
-                            'bandwidth': float(bandwidth)
-                        })
-
-            # Store results
-            fooof_results[ch_name] = {
-                'aperiodic_params': aperiodic_params.tolist(),
-                'peak_params': peak_params.tolist() if len(peak_params) > 0 else [],
-                'alpha_peaks': alpha_peaks,
-                'r_squared': float(r_squared),
-                'error': float(error),
-                'n_peaks': len(peak_params)
-            }
-
-            # Create subplot for this channel (3 panels: original+fit, aperiodic, periodic)
-            gs = fig.add_gridspec(num_rows, 3, hspace=0.3, wspace=0.3)
-
-            # Panel 1: Original PSD + FOOOF Fit
-            ax1 = fig.add_subplot(gs[idx, 0])
-            ax1.semilogy(freqs_fit, psd_fit, color='black', linewidth=2, label='Original PSD', alpha=0.7)
-            ax1.semilogy(freqs_fit, model_fit, color='red', linewidth=2, label='FOOOF Fit', linestyle='--')
-
-            # Highlight alpha region
-            ax1.axvspan(8, 12, alpha=0.2, color='green', label='Alpha Band')
-
-            # Mark alpha peaks
-            for alpha_peak in alpha_peaks:
-                ax1.plot(alpha_peak['frequency'], 10**alpha_peak['power'], 'r*', markersize=15)
-
-            ax1.set_xlabel('Frequency (Hz)', fontsize=10)
-            ax1.set_ylabel('Power (V²/Hz)', fontsize=10)
-            ax1.set_title(f'{ch_name} - Original PSD + FOOOF Fit', fontsize=11, fontweight='bold')
-            ax1.legend(fontsize=8)
-            ax1.grid(True, alpha=0.3)
-
-            # Add text with aperiodic parameters
-            if aperiodic_mode == 'fixed':
-                offset, exponent = aperiodic_params
-                text_str = f'Offset: {offset:.3f}\\nExponent: {exponent:.3f}\\nR²: {r_squared:.3f}'
-            else:  # knee mode
-                offset, knee, exponent = aperiodic_params
-                text_str = f'Offset: {offset:.3f}\\nKnee: {knee:.3f}\\nExponent: {exponent:.3f}\\nR²: {r_squared:.3f}'
-
-            ax1.text(0.02, 0.98, text_str, transform=ax1.transAxes,
-                    fontsize=9, verticalalignment='top',
-                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-
-            # Panel 2: Aperiodic Component
-            ax2 = fig.add_subplot(gs[idx, 1])
-            ax2.semilogy(freqs_fit, aperiodic_fit, color='blue', linewidth=2, label='Aperiodic (1/f)')
-            ax2.set_xlabel('Frequency (Hz)', fontsize=10)
-            ax2.set_ylabel('Power (V²/Hz)', fontsize=10)
-            ax2.set_title(f'{ch_name} - Aperiodic Component', fontsize=11, fontweight='bold')
-            ax2.legend(fontsize=8)
-            ax2.grid(True, alpha=0.3)
-
-            # Panel 3: Periodic Component (Flattened Spectrum)
-            ax3 = fig.add_subplot(gs[idx, 2])
-            # Compute periodic component (original - aperiodic in log space)
-            periodic_component = psd_fit - aperiodic_fit
-            ax3.plot(freqs_fit, periodic_component, color='purple', linewidth=2, label='Periodic Component')
-            ax3.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
-
-            # Highlight alpha region
-            ax3.axvspan(8, 12, alpha=0.2, color='green', label='Alpha Band')
-
-            # Mark detected peaks
-            if len(peak_params) > 0:
-                for peak in peak_params:
-                    center_freq, power, bandwidth = peak
-                    # Find closest frequency index
-                    peak_idx = np.argmin(np.abs(freqs_fit - center_freq))
-                    ax3.plot(center_freq, periodic_component[peak_idx], 'ro', markersize=8)
-
-            ax3.set_xlabel('Frequency (Hz)', fontsize=10)
-            ax3.set_ylabel('Power (V²/Hz)', fontsize=10)
-            ax3.set_title(f'{ch_name} - Periodic Component', fontsize=11, fontweight='bold')
-            ax3.legend(fontsize=8)
-            ax3.grid(True, alpha=0.3)
-
-        except Exception as e:
-            print(f"FOOOF fitting error for channel {ch_name}: {e}")
-            fooof_results[ch_name] = {
-                'error': str(e),
-                'success': False
-            }
-
-    plt.tight_layout()
-
-    # Convert to base64
-    buffer = io.BytesIO()
-    plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight', facecolor='white')
-    buffer.seek(0)
-    plot_base64 = base64.b64encode(buffer.getvalue()).decode()
-    plt.close()
-
-    return json.dumps({
-        'analysis_type': 'fooof',
-        'plot_base64': plot_base64,
-        'parameters': params,
-        'results': fooof_results,
-        'success': True,
-        'message': f'FOOOF analysis completed for {len(selected_channels)} channel(s) in range {freq_range[0]}-{freq_range[1]} Hz'
-    })
+    # Call the external module function
+    return run_fooof_analysis(
+        edf_reader,
+        selected_channels,
+        params,
+        get_channel_names,
+        get_signal_data,
+        get_sample_frequency
+    )
 
 def analyze_snr(edf_reader, parameters):
     """Compute Signal-to-Noise Ratio"""
