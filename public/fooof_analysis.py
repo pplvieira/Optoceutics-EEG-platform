@@ -129,7 +129,7 @@ def analyze_fooof_spectrum(freqs, psd, channel_name, parameters):
         }
 
 
-def create_fooof_plot(results_list, freq_range):
+def create_fooof_plot(results_list, freq_range, show_aperiodic=True, show_periodic=True):
     """
     Create a single comprehensive plot showing FOOOF results for all channels.
 
@@ -139,6 +139,10 @@ def create_fooof_plot(results_list, freq_range):
         List of analysis results (one per channel)
     freq_range : list
         [min, max] frequency range
+    show_aperiodic : bool
+        Whether to show the aperiodic (1/f) component line
+    show_periodic : bool
+        Whether to show the periodic component as filled area
 
     Returns:
     --------
@@ -146,8 +150,8 @@ def create_fooof_plot(results_list, freq_range):
     """
     num_channels = len(results_list)
 
-    # Create figure with subplots (one row per channel)
-    fig, axes = plt.subplots(num_channels, 1, figsize=(12, 4 * num_channels))
+    # Create figure with subplots (one row per channel) - increased height to 5.5 per channel
+    fig, axes = plt.subplots(num_channels, 1, figsize=(12, 5.5 * num_channels))
 
     # Handle single channel case
     if num_channels == 1:
@@ -175,14 +179,16 @@ def create_fooof_plot(results_list, freq_range):
         # Plot FOOOF model fit
         ax.semilogy(freqs, model_fit, 'r--', linewidth=2, label='FOOOF Fit', alpha=0.9)
 
-        # Plot aperiodic component
-        ax.semilogy(freqs, aperiodic_fit, 'b-', linewidth=1.5, label='Aperiodic (1/f)', alpha=0.7)
+        # Plot aperiodic component (optional)
+        if show_aperiodic:
+            ax.semilogy(freqs, aperiodic_fit, 'b-', linewidth=2, label='Aperiodic (1/f)', alpha=0.7)
 
-        # Plot periodic component as filled area above aperiodic
-        # Convert to log space for proper visualization
-        periodic_power = aperiodic_fit * (1 + periodic_fit / np.max(np.abs(periodic_fit)) * 0.3)
-        ax.fill_between(freqs, aperiodic_fit, periodic_power,
-                        color='purple', alpha=0.3, label='Periodic Component')
+        # Plot periodic component as filled area above aperiodic (optional)
+        if show_periodic:
+            # Convert to log space for proper visualization
+            periodic_power = aperiodic_fit * (1 + periodic_fit / np.max(np.abs(periodic_fit)) * 0.3)
+            ax.fill_between(freqs, aperiodic_fit, periodic_power,
+                            color='purple', alpha=0.3, label='Periodic Component')
 
         # Highlight alpha region
         ax.axvspan(8, 12, alpha=0.15, color='green', label='Alpha Band (8-12 Hz)')
@@ -232,10 +238,14 @@ def create_fooof_plot(results_list, freq_range):
         if alpha_peaks:
             text_str += f'\n\nAlpha Peaks:'
             for i, peak in enumerate(alpha_peaks[:3]):  # Show max 3 peaks
-                text_str += f'\n  {peak["frequency"]:.1f} Hz (BW: {peak["bandwidth"]:.1f})'
+                freq = peak["frequency"]
+                bw = peak["bandwidth"]
+                power = peak["power"]
+                text_str += f'\n  {freq:.1f} Hz | Pwr: {power:.2f} | BW: {bw:.1f}'
 
-        ax.text(0.02, 0.98, text_str, transform=ax.transAxes,
-               fontsize=9, verticalalignment='top',
+        # Position text box at bottom left to avoid obstructing data
+        ax.text(0.02, 0.02, text_str, transform=ax.transAxes,
+               fontsize=9, verticalalignment='bottom',
                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.85,
                         edgecolor='gray', linewidth=1.5),
                family='monospace')
@@ -289,6 +299,8 @@ def run_fooof_analysis(edf_reader, selected_channels, parameters,
         nperseg_seconds = parameters.get('nperseg_seconds', 4.0)
         noverlap_proportion = parameters.get('noverlap_proportion', 0.5)
         freq_range = parameters.get('freq_range', [1, 50])
+        show_aperiodic = parameters.get('show_aperiodic', True)
+        show_periodic = parameters.get('show_periodic', True)
 
         # Get channel information
         all_channels = get_channel_names_func(edf_reader)
@@ -339,8 +351,8 @@ def run_fooof_analysis(edf_reader, selected_channels, parameters,
                     'success': False
                 }
 
-        # Create plot
-        plot_base64 = create_fooof_plot(results_list, freq_range)
+        # Create plot with display options
+        plot_base64 = create_fooof_plot(results_list, freq_range, show_aperiodic, show_periodic)
 
         return json.dumps({
             'analysis_type': 'fooof',

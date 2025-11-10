@@ -140,7 +140,9 @@ export default function PyodideEDFProcessor() {
     min_peak_height: 0.1,           // Minimum relative peak height
     aperiodic_mode: 'fixed' as 'fixed' | 'knee',  // Aperiodic fitting mode
     nperseg_seconds: 4.0,           // PSD computation window (seconds)
-    noverlap_proportion: 0.5        // PSD overlap proportion (0-1)
+    noverlap_proportion: 0.5,       // PSD overlap proportion (0-1)
+    show_aperiodic: true,           // Show aperiodic component in plot
+    show_periodic: true             // Show periodic component in plot
   });
 
   // Update raw signal duration when time frame changes
@@ -4161,6 +4163,43 @@ export_modified_edf()
                           className="w-full p-2 border border-gray-300 rounded text-xs"
                         />
                         <p className="text-xs text-gray-500 mt-1">Default: 0.5 (50%)</p>
+                      </div>
+
+                      {/* Plot display options */}
+                      <div className="border-t border-purple-200 pt-3 mt-3">
+                        <label className="block text-xs font-semibold mb-2">Plot Display Options:</label>
+
+                        <div className="flex items-center mb-2">
+                          <input
+                            type="checkbox"
+                            id="show-aperiodic"
+                            checked={fooofParams.show_aperiodic}
+                            onChange={(e) => setFooofParams(prev => ({
+                              ...prev,
+                              show_aperiodic: e.target.checked
+                            }))}
+                            className="mr-2 h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded"
+                          />
+                          <label htmlFor="show-aperiodic" className="text-xs text-gray-700">
+                            Show Aperiodic (1/f) Component
+                          </label>
+                        </div>
+
+                        <div className="flex items-center">
+                          <input
+                            type="checkbox"
+                            id="show-periodic"
+                            checked={fooofParams.show_periodic}
+                            onChange={(e) => setFooofParams(prev => ({
+                              ...prev,
+                              show_periodic: e.target.checked
+                            }))}
+                            className="mr-2 h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded"
+                          />
+                          <label htmlFor="show-periodic" className="text-xs text-gray-700">
+                            Show Periodic Component
+                          </label>
+                        </div>
                       </div>
                     </div>
                   )}
