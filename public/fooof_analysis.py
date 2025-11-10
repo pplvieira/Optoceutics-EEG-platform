@@ -173,21 +173,38 @@ def create_fooof_plot(results_list, freq_range, show_aperiodic=True, show_period
         aperiodic_fit = np.array(result['aperiodic_fit'])
         periodic_fit = np.array(result['periodic_fit'])
 
+        # Debug prints to verify data
+        print(f"\n[FOOOF Plot Debug - {result['channel']}]")
+        print(f"  show_aperiodic: {show_aperiodic}")
+        print(f"  show_periodic: {show_periodic}")
+        print(f"  freqs shape: {freqs.shape}, range: [{freqs.min():.2f}, {freqs.max():.2f}]")
+        print(f"  psd_original shape: {psd_original.shape}, range: [{psd_original.min():.2e}, {psd_original.max():.2e}]")
+        print(f"  model_fit shape: {model_fit.shape}, range: [{model_fit.min():.2e}, {model_fit.max():.2e}]")
+        print(f"  aperiodic_fit shape: {aperiodic_fit.shape}, range: [{aperiodic_fit.min():.2e}, {aperiodic_fit.max():.2e}]")
+
         # Plot original PSD
         ax.semilogy(freqs, psd_original, 'k-', linewidth=2, label='Original PSD', alpha=0.7)
+        print(f"  ✓ Plotted Original PSD")
 
         # Plot FOOOF model fit
         ax.semilogy(freqs, model_fit, 'r--', linewidth=2, label='FOOOF Fit', alpha=0.9)
+        print(f"  ✓ Plotted FOOOF Fit")
 
         # Plot aperiodic component (optional)
         if show_aperiodic:
             ax.semilogy(freqs, aperiodic_fit, 'b-', linewidth=2, label='Aperiodic (1/f)', alpha=0.7)
+            print(f"  ✓ Plotted Aperiodic component (blue line)")
+        else:
+            print(f"  ✗ Aperiodic component NOT plotted (disabled)")
 
         # Plot periodic component as filled area between aperiodic and full model (optional)
         if show_periodic:
             # Fill the area between aperiodic component and full model (this is the periodic/peak component)
             ax.fill_between(freqs, aperiodic_fit, model_fit,
                             color='purple', alpha=0.3, label='Periodic Component')
+            print(f"  ✓ Plotted Periodic component (purple fill)")
+        else:
+            print(f"  ✗ Periodic component NOT plotted (disabled)")
 
         # Highlight alpha region
         ax.axvspan(8, 12, alpha=0.15, color='green', label='Alpha Band (8-12 Hz)')
@@ -198,7 +215,7 @@ def create_fooof_plot(results_list, freq_range, show_aperiodic=True, show_period
             peak_freq = alpha_peak['frequency']
             # Find closest frequency index
             peak_idx = np.argmin(np.abs(freqs - peak_freq))
-            ax.plot(peak_freq, psd_original[peak_idx], 'r*', markersize=20,
+            ax.plot(peak_freq, psd_original[peak_idx], 'r*', markersize=14,
                    markeredgecolor='darkred', markeredgewidth=1.5,
                    label='Alpha Peak' if alpha_peaks.index(alpha_peak) == 0 else '')
 
@@ -300,6 +317,13 @@ def run_fooof_analysis(edf_reader, selected_channels, parameters,
         freq_range = parameters.get('freq_range', [1, 50])
         show_aperiodic = parameters.get('show_aperiodic', True)
         show_periodic = parameters.get('show_periodic', True)
+
+        # Debug: verify parameters
+        print(f"\n[FOOOF Analysis Parameters]")
+        print(f"  Received parameters: {list(parameters.keys())}")
+        print(f"  show_aperiodic: {show_aperiodic} (type: {type(show_aperiodic)})")
+        print(f"  show_periodic: {show_periodic} (type: {type(show_periodic)})")
+        print(f"  freq_range: {freq_range}")
 
         # Get channel information
         all_channels = get_channel_names_func(edf_reader)
