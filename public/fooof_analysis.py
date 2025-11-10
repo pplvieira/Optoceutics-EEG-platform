@@ -86,11 +86,23 @@ def analyze_fooof_spectrum(freqs, psd, channel_name, parameters):
         error = fm.error_
 
         # Get FOOOF model components
-        model_fit = fm.fooofed_spectrum_
-        aperiodic_fit = fm._ap_fit
+        # NOTE: FOOOF returns results in log10 space, but we need linear power for plotting with semilogy()
+        model_fit_log = fm.fooofed_spectrum_
+        aperiodic_fit_log = fm._ap_fit
 
-        # Calculate periodic component
+        # Convert from log10 power to linear power
+        model_fit = 10 ** model_fit_log
+        aperiodic_fit = 10 ** aperiodic_fit_log
+
+        # Calculate periodic component (in linear space)
         periodic_fit = model_fit - aperiodic_fit
+
+        print(f"[FOOOF Conversion Debug - {channel_name}]")
+        print(f"  model_fit_log range: [{model_fit_log.min():.2f}, {model_fit_log.max():.2f}]")
+        print(f"  model_fit (linear) range: [{model_fit.min():.2e}, {model_fit.max():.2e}]")
+        print(f"  aperiodic_fit_log range: [{aperiodic_fit_log.min():.2f}, {aperiodic_fit_log.max():.2f}]")
+        print(f"  aperiodic_fit (linear) range: [{aperiodic_fit.min():.2e}, {aperiodic_fit.max():.2e}]")
+        print(f"  psd_fit range: [{psd_fit.min():.2e}, {psd_fit.max():.2e}]")
 
         # Find alpha peaks (8-12 Hz)
         alpha_peaks = []
