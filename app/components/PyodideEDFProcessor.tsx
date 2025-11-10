@@ -248,63 +248,39 @@ export default function PyodideEDFProcessor() {
         setLoadingMessage('FOOOF analysis module not available');
       }
 
-      // Install resutil for custom Optoceutics plot styling from local wheel
-      // Manual installation to avoid dependency conflicts
+      // Install resutil for custom Optoceutics plot styling
+      // Use custom lightweight module to avoid dependency issues
       try {
-        setLoadingMessage('Installing resutil dependencies...');
-        const micropip = pyodide.pyimport("micropip");
+        setLoadingMessage('Loading Optoceutics styling library...');
 
-        // First install rich (required dependency for resutil)
-        await micropip.install(['rich']);
-        console.log('Rich library installed successfully');
-
-        setLoadingMessage('Installing resutil (Optoceutics styling library)...');
-
-        // Fetch the wheel file
-        const wheelResponse = await fetch('/python-packages/resutil-0.1.18-py3-none-any.whl');
-        if (!wheelResponse.ok) {
-          throw new Error(`Failed to fetch resutil wheel: ${wheelResponse.status}`);
+        // Fetch our custom resutil module
+        const resutilResponse = await fetch('/python-packages/resutil_oc.py');
+        if (!resutilResponse.ok) {
+          throw new Error(`Failed to fetch resutil_oc.py: ${resutilResponse.status}`);
         }
-        const wheelBytes = await wheelResponse.arrayBuffer();
+        const resutilCode = await resutilResponse.text();
 
-        // Write to Pyodide filesystem
-        pyodide.FS.writeFile('/tmp/resutil.whl', new Uint8Array(wheelBytes));
-
-        // Unpack the wheel manually using zipfile and add to sys.path
+        // Load it into Python as 'resutil' module
         await pyodide.runPythonAsync(`
 import sys
-import zipfile
-import os
+from types import ModuleType
 
-# Extract wheel to temporary directory
-wheel_path = '/tmp/resutil.whl'
-extract_path = '/tmp/resutil_extracted'
+# Create resutil module
+resutil = ModuleType('resutil')
 
-# Create extraction directory
-if not os.path.exists(extract_path):
-    os.makedirs(extract_path)
+# Execute the code in the module's namespace
+exec('''${resutilCode.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}''', resutil.__dict__)
 
-# Unzip the wheel
-with zipfile.ZipFile(wheel_path, 'r') as zip_ref:
-    zip_ref.extractall(extract_path)
+# Add to sys.modules so it can be imported
+sys.modules['resutil'] = resutil
 
-# Add to sys.path (the package should be in the extracted directory)
-if extract_path not in sys.path:
-    sys.path.insert(0, extract_path)
-
-# Verify resutil is importable
-try:
-    import resutil
-    print(f"✓ Resutil loaded successfully from {extract_path}")
-except ImportError as e:
-    print(f"✗ Failed to import resutil: {e}")
-    raise
+print("✓ Optoceutics styling library (resutil) loaded successfully")
 `);
 
-        setLoadingMessage('Resutil library installed successfully');
-        console.log('Resutil library installed manually from local wheel');
+        setLoadingMessage('Optoceutics styling library loaded');
+        console.log('Custom resutil module loaded successfully');
       } catch (error) {
-        console.warn('Resutil installation failed (will use default matplotlib styling):', error);
+        console.warn('Resutil loading failed (will use default matplotlib styling):', error);
         setLoadingMessage('Using default matplotlib styling');
       }
 
