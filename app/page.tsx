@@ -36,7 +36,7 @@ const ExperimentTabs = [
 ];
 
 export default function Home() {
-  const [currentMode, setCurrentMode] = useState<DesktopMode>('developer');
+  const [currentMode, setCurrentMode] = useState<DesktopMode>('browser');
   const [activeTab, setActiveTab] = useState(0);
   const [uploadedFiles, setUploadedFiles] = useState<EDFFile[]>([]);
   const [selectedFile, setSelectedFile] = useState<EDFFile | null>(null);
@@ -112,11 +112,8 @@ export default function Home() {
                   setCurrentMode('developer');
                   setActiveTab(0);
                 }}
-                className={`px-3 py-2 rounded-md font-medium transition-all text-sm ${
-                  currentMode === 'developer'
-                    ? 'bg-[var(--gold)] text-[var(--navy)] shadow-lg'
-                    : 'text-blue-200 hover:text-white hover:bg-blue-700'
-                }`}
+                disabled
+                className="px-3 py-2 rounded-md font-medium transition-all text-sm line-through opacity-50 cursor-not-allowed text-blue-300"
               >
                 Developer
               </button>
