@@ -183,11 +183,10 @@ def create_fooof_plot(results_list, freq_range, show_aperiodic=True, show_period
         if show_aperiodic:
             ax.semilogy(freqs, aperiodic_fit, 'b-', linewidth=2, label='Aperiodic (1/f)', alpha=0.7)
 
-        # Plot periodic component as filled area above aperiodic (optional)
+        # Plot periodic component as filled area between aperiodic and full model (optional)
         if show_periodic:
-            # Convert to log space for proper visualization
-            periodic_power = aperiodic_fit * (1 + periodic_fit / np.max(np.abs(periodic_fit)) * 0.3)
-            ax.fill_between(freqs, aperiodic_fit, periodic_power,
+            # Fill the area between aperiodic component and full model (this is the periodic/peak component)
+            ax.fill_between(freqs, aperiodic_fit, model_fit,
                             color='purple', alpha=0.3, label='Periodic Component')
 
         # Highlight alpha region
