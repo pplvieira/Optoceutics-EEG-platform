@@ -185,7 +185,21 @@ export default function PyodideEDFProcessor() {
         setLoadingMessage('Using built-in pure Python EDF reader');
         edf_library_available = false;
       }
-      
+
+      // Install custom resutil package
+      try {
+        setLoadingMessage('Installing resutil package...');
+        const micropip = pyodide.pyimport("micropip");
+        await micropip.install('/pyodide-packages/resutil-0.4.0-py3-none-any.whl');
+        setLoadingMessage('resutil installed successfully');
+
+        // Import resutil to make it available globally
+        await pyodide.runPython('import resutil');
+        console.log('resutil package loaded successfully');
+      } catch (error) {
+        console.warn('Failed to install resutil package:', error);
+      }
+
       console.log('EDF library available:', edf_library_available);
       
       // Setup Python environment
