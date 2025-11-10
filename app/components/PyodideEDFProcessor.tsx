@@ -249,16 +249,53 @@ export default function PyodideEDFProcessor() {
       }
 
       // Install resutil for custom Optoceutics plot styling from local wheel
+      // Manual installation to avoid dependency conflicts
       try {
         setLoadingMessage('Installing resutil (Optoceutics styling library)...');
-        const micropip = pyodide.pyimport("micropip");
 
-        // Install from local wheel file to avoid dependency conflicts
-        // Use deps=False to skip dependency resolution (google-auth conflict)
-        await micropip.install('/python-packages/resutil-0.1.18-py3-none-any.whl', {deps: false});
+        // Fetch the wheel file
+        const wheelResponse = await fetch('/python-packages/resutil-0.1.18-py3-none-any.whl');
+        if (!wheelResponse.ok) {
+          throw new Error(`Failed to fetch resutil wheel: ${wheelResponse.status}`);
+        }
+        const wheelBytes = await wheelResponse.arrayBuffer();
+
+        // Write to Pyodide filesystem
+        pyodide.FS.writeFile('/tmp/resutil.whl', new Uint8Array(wheelBytes));
+
+        // Unpack the wheel manually using zipfile and add to sys.path
+        await pyodide.runPythonAsync(`
+import sys
+import zipfile
+import os
+
+# Extract wheel to temporary directory
+wheel_path = '/tmp/resutil.whl'
+extract_path = '/tmp/resutil_extracted'
+
+# Create extraction directory
+if not os.path.exists(extract_path):
+    os.makedirs(extract_path)
+
+# Unzip the wheel
+with zipfile.ZipFile(wheel_path, 'r') as zip_ref:
+    zip_ref.extractall(extract_path)
+
+# Add to sys.path (the package should be in the extracted directory)
+if extract_path not in sys.path:
+    sys.path.insert(0, extract_path)
+
+# Verify resutil is importable
+try:
+    import resutil
+    print(f"✓ Resutil loaded successfully from {extract_path}")
+except ImportError as e:
+    print(f"✗ Failed to import resutil: {e}")
+    raise
+`);
 
         setLoadingMessage('Resutil library installed successfully');
-        console.log('Resutil library installed from local wheel for custom plot styling');
+        console.log('Resutil library installed manually from local wheel (no dependencies)');
       } catch (error) {
         console.warn('Resutil installation failed (will use default matplotlib styling):', error);
         setLoadingMessage('Using default matplotlib styling');
