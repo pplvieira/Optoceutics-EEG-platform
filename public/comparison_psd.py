@@ -245,39 +245,56 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, 
             if valid_peaks:
                 print(f"\nAdding alpha peak labels to plot ({len(valid_peaks)} peaks found)")
 
+                # Get y-axis limits for positioning
+                ylim = ax.get_ylim()
+                y_range = ylim[1] - ylim[0]
+
+                # Define vertical positions for labels to avoid overlap
+                # Distribute labels across different heights
+                num_peaks = len(valid_peaks)
+                if num_peaks == 1:
+                    y_positions = [0.85]  # Single peak at 85%
+                elif num_peaks == 2:
+                    y_positions = [0.90, 0.75]  # Two peaks staggered
+                elif num_peaks == 3:
+                    y_positions = [0.90, 0.78, 0.66]  # Three peaks staggered
+                else:
+                    # For 4+ peaks, distribute evenly between 65-90%
+                    y_positions = [0.90 - (i * 0.08) for i in range(num_peaks)]
+
                 # Add labels for each trace with alpha peak
-                for peak_info in valid_peaks:
+                for idx, peak_info in enumerate(valid_peaks):
                     freq = peak_info['frequency']
-                    label_text = peak_info['label']
                     color = peak_info['color']
 
-                    # Find the y-position at this frequency (approximate from plot limits)
-                    # Place label at the top of the plot area
-                    ylim = ax.get_ylim()
-                    label_y = ylim[1] * 0.8  # Place at 80% of max y
+                    # Get y-position for this label
+                    y_fraction = y_positions[idx % len(y_positions)]
+                    label_y = ylim[0] + (y_range * y_fraction)
 
-                    # Add text annotation
+                    # Find the actual PSD value at this frequency for arrow placement
+                    # Place arrow at a reasonable point on the trace
+                    arrow_y = ylim[0] + (y_range * 0.3)  # Arrow points to 30% height
+
+                    # Simplified text - just the alpha peak frequency
+                    label_text = f'Alpha: {freq:.1f} Hz'
+
+                    # Add text annotation with arrow, no box
                     ax.annotate(
-                        f'{label_text}\nα: {freq:.1f} Hz',
-                        xy=(freq, label_y),
-                        xytext=(0, 10),
-                        textcoords='offset points',
+                        label_text,
+                        xy=(freq, arrow_y),  # Arrow points to this location
+                        xytext=(freq, label_y),  # Text appears here
                         ha='center',
-                        fontsize=8 if use_resutil_style else 7,
+                        va='bottom',
+                        fontsize=7 if use_resutil_style else 6,
                         color=color,
-                        fontweight='bold',
-                        bbox=dict(
-                            boxstyle='round,pad=0.4',
-                            facecolor='white',
-                            edgecolor=color,
-                            alpha=0.9,
-                            linewidth=1.5
-                        ),
+                        fontweight='normal',
                         arrowprops=dict(
                             arrowstyle='->',
                             color=color,
-                            linewidth=1.5,
-                            connectionstyle='arc3,rad=0'
+                            linewidth=1.0,
+                            alpha=0.7,
+                            shrinkA=0,
+                            shrinkB=5
                         )
                     )
 
