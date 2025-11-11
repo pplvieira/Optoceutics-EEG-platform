@@ -3099,9 +3099,13 @@ export_modified_edf()
       const result = await pyodideRef.current.runPythonAsync(`
 import json
 
+# Convert JsProxy objects to Python objects
+traces_metadata_py = traces_metadata.to_py()
+comparison_psd_params_py = comparison_psd_params.to_py()
+
 # Build traces config by converting JS bytes to Python bytes
 traces_config = []
-for trace_meta in traces_metadata:
+for trace_meta in traces_metadata_py:
     # Get the file bytes variable name
     file_bytes_var = trace_meta['file_bytes_var']
 
@@ -3132,7 +3136,7 @@ print(f"Built {len(traces_config)} trace configurations")
 # Call the comparison PSD function
 result_json = generate_comparison_psd(
     traces_config,
-    comparison_psd_params,
+    comparison_psd_params_py,
     use_resutil_style
 )
 
