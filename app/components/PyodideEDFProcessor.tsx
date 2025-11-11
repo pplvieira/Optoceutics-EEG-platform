@@ -38,6 +38,7 @@ interface EDFAnnotation {
 }
 
 interface AnalysisResult {
+  id?: string;
   analysis_type: string;
   plot_base64?: string;
   data?: Record<string, any>;
@@ -103,6 +104,13 @@ export default function PyodideEDFProcessor() {
   const [annotationsNeedUpdate, setAnnotationsNeedUpdate] = useState<boolean>(false);
   const [generatingPDF, setGeneratingPDF] = useState<boolean>(false);
 
+  // Plot selection for reports
+  const [selectedPlotsForReport, setSelectedPlotsForReport] = useState<string[]>([]);
+  const [plotSelectionOrder, setPlotSelectionOrder] = useState<string[]>([]);
+
+  // Resutil styling toggle
+  const [useResutilStyle, setUseResutilStyle] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pyodideRef = useRef<any>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
@@ -129,6 +137,20 @@ export default function PyodideEDFProcessor() {
     noverlap_proportion: 0.5,     // proportion of nperseg (0 to 1)
     window: 'hann' as 'hann' | 'boxcar',  // window type
     use_db: false                 // true for dB, false for power units
+  });
+
+  // FOOOF analysis parameters
+  const [showAdvancedFOOOFSettings, setShowAdvancedFOOOFSettings] = useState(false);
+  const [fooofParams, setFooofParams] = useState({
+    freq_range: [1, 50],           // Frequency range for fitting [min, max]
+    peak_width_limits: [0.5, 12],  // Min/max peak width in Hz
+    max_n_peaks: 6,                 // Maximum number of peaks to detect
+    min_peak_height: 0.1,           // Minimum relative peak height
+    aperiodic_mode: 'fixed' as 'fixed' | 'knee',  // Aperiodic fitting mode
+    nperseg_seconds: 4.0,           // PSD computation window (seconds)
+    noverlap_proportion: 0.5,       // PSD overlap proportion (0-1)
+    show_aperiodic: true,           // Show aperiodic component in plot
+    show_periodic: true             // Show periodic component in plot
   });
 
   // Update raw signal duration when time frame changes
@@ -212,7 +234,70 @@ export default function PyodideEDFProcessor() {
       }
 
       console.log('EDF library available:', edf_library_available);
-      
+
+      // Install FOOOF library for spectral parameterization
+      try {
+        setLoadingMessage('Installing FOOOF library...');
+        const micropip = pyodide.pyimport("micropip");
+        await micropip.install(['fooof']);
+        setLoadingMessage('FOOOF library installed successfully');
+        console.log('FOOOF library installed');
+      } catch (error) {
+        console.warn('FOOOF installation failed:', error);
+        setLoadingMessage('FOOOF library not available');
+      }
+
+      // Load FOOOF analysis module from external file
+      try {
+        setLoadingMessage('Loading FOOOF analysis module...');
+        const fooofResponse = await fetch('/fooof_analysis.py');
+        if (!fooofResponse.ok) {
+          throw new Error(`Failed to load fooof_analysis.py: ${fooofResponse.statusText}`);
+        }
+        const fooofCode = await fooofResponse.text();
+        await pyodide.runPython(fooofCode);
+        console.log('FOOOF analysis module loaded successfully');
+      } catch (error) {
+        console.warn('Failed to load FOOOF analysis module:', error);
+        setLoadingMessage('FOOOF analysis module not available');
+      }
+
+      // Install resutil for custom Optoceutics plot styling
+      // Use custom lightweight module to avoid dependency issues
+      try {
+        setLoadingMessage('Loading Optoceutics styling library...');
+
+        // Fetch our custom resutil module
+        const resutilResponse = await fetch('/python-packages/resutil_oc.py');
+        if (!resutilResponse.ok) {
+          throw new Error(`Failed to fetch resutil_oc.py: ${resutilResponse.status}`);
+        }
+        const resutilCode = await resutilResponse.text();
+
+        // Load it into Python as 'resutil' module
+        await pyodide.runPythonAsync(`
+import sys
+from types import ModuleType
+
+# Create resutil module
+resutil = ModuleType('resutil')
+
+# Execute the code in the module's namespace
+exec('''${resutilCode.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}''', resutil.__dict__)
+
+# Add to sys.modules so it can be imported
+sys.modules['resutil'] = resutil
+
+print("✓ Optoceutics styling library (resutil) loaded successfully")
+`);
+
+        setLoadingMessage('Optoceutics styling library loaded');
+        console.log('Custom resutil module loaded successfully');
+      } catch (error) {
+        console.warn('Resutil loading failed (will use default matplotlib styling):', error);
+        setLoadingMessage('Using default matplotlib styling');
+      }
+
       // Setup Python environment
       setLoadingMessage('Setting up analysis environment...');
       await pyodide.runPython(`
@@ -1359,6 +1444,8 @@ def analyze_traditional(analysis_type, parameters, start_time=None, end_time=Non
             return analyze_raw_signal(edf_reader, parameters)
         elif analysis_type == 'psd':
             return analyze_psd(edf_reader, parameters)
+        elif analysis_type == 'fooof':
+            return analyze_fooof(edf_reader, parameters)
         elif analysis_type == 'snr':
             return analyze_snr(edf_reader, parameters)
         elif analysis_type == 'theta_beta_ratio':
@@ -1516,6 +1603,19 @@ def analyze_psd(edf_reader, parameters):
     noverlap_proportion = params.get('noverlap_proportion', 0.5)
     window = params.get('window', 'hann')
     use_db = params.get('use_db', False)
+    use_resutil_style = params.get('use_resutil_style', False)
+
+    # Apply resutil styling if requested
+    if use_resutil_style:
+        try:
+            import resutil
+            resutil.set_oc_style()
+            resutil.set_oc_font()
+            print("Applied Optoceutics custom styling to PSD plot (resutil)")
+        except ImportError:
+            print("Resutil not available for PSD, using default matplotlib styling")
+        except Exception as e:
+            print(f"Failed to apply resutil styling to PSD: {e}")
 
     all_channels = get_channel_names(edf_reader)
 
@@ -1592,6 +1692,49 @@ def analyze_psd(edf_reader, parameters):
         'success': True,
         'message': f'PSD computed using {method_title} method for frequency range {fmin}-{fmax} Hz'
     })
+
+def analyze_fooof(edf_reader, parameters):
+    """
+    FOOOF (Fitting Oscillations & One Over F) Spectral Parameterization
+    Wrapper function that calls the external fooof_analysis module
+    """
+    # Convert parameters to Python dict to avoid JsProxy issues
+    try:
+        if hasattr(parameters, 'to_py'):
+            params = parameters.to_py()
+        elif str(type(parameters)) == "<class 'pyodide.ffi.JsProxy'>":
+            params = {}
+            for key in parameters:
+                params[key] = parameters[key]
+        else:
+            params = dict(parameters)
+    except Exception as e:
+        print(f"Parameter conversion error: {e}")
+        params = {
+            'freq_range': [1, 50],
+            'peak_width_limits': [0.5, 12],
+            'max_n_peaks': 6,
+            'min_peak_height': 0.1,
+            'aperiodic_mode': 'fixed',
+            'nperseg_seconds': 4.0,
+            'noverlap_proportion': 0.5
+        }
+
+    # Get selected channels
+    try:
+        selected_channels = list(js_selected_channels) if 'js_selected_channels' in globals() else []
+    except:
+        selected_channels = []
+
+    # Call the external module function
+    return run_fooof_analysis(
+        edf_reader,
+        selected_channels,
+        params,
+        get_channel_names,
+        get_signal_data,
+        get_sample_frequency
+    )
 
 def analyze_snr(edf_reader, parameters):
     """Compute Signal-to-Noise Ratio"""
@@ -2521,7 +2664,14 @@ export_modified_edf()
         // Merge base parameters with advanced settings for PSD
         parameters = {
           ...analysisParams.psd,
-          ...advancedPSDSettings
+          ...advancedPSDSettings,
+          use_resutil_style: useResutilStyle
+        };
+      } else if (analysisType === 'fooof') {
+        // Use FOOOF parameters with styling option
+        parameters = {
+          ...fooofParams,
+          use_resutil_style: useResutilStyle
         };
       } else if (analysisType === 'snr') {
         parameters = analysisParams.snr;
@@ -2572,6 +2722,9 @@ export_modified_edf()
         };
       }
 
+      // Add unique ID for plot selection
+      parsedResult.id = `${analysisType}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
       setAnalysisResults(prev => [...prev, parsedResult]);
       setSuccess(`${analysisType} analysis completed!`);
 
@@ -2599,18 +2752,114 @@ export_modified_edf()
     });
   };
 
+  // Plot selection handlers for reports
+  const handlePlotSelection = (plotId: string, selected: boolean) => {
+    if (selected) {
+      setSelectedPlotsForReport(prev => [...prev, plotId]);
+      setPlotSelectionOrder(prev => [...prev, plotId]);
+    } else {
+      setSelectedPlotsForReport(prev => prev.filter(id => id !== plotId));
+      setPlotSelectionOrder(prev => prev.filter(id => id !== plotId));
+    }
+  };
+
+  const movePlotUp = (plotId: string) => {
+    setPlotSelectionOrder(prev => {
+      const index = prev.indexOf(plotId);
+      if (index <= 0) return prev;
+      const newOrder = [...prev];
+      [newOrder[index - 1], newOrder[index]] = [newOrder[index], newOrder[index - 1]];
+      return newOrder;
+    });
+  };
+
+  const movePlotDown = (plotId: string) => {
+    setPlotSelectionOrder(prev => {
+      const index = prev.indexOf(plotId);
+      if (index < 0 || index >= prev.length - 1) return prev;
+      const newOrder = [...prev];
+      [newOrder[index], newOrder[index + 1]] = [newOrder[index + 1], newOrder[index]];
+      return newOrder;
+    });
+  };
+
   const prepareReportData = (): PatientReportData | null => {
     if (!metadata || !currentFile) {
       return null;
     }
 
-    // Find the LAST (most recent) PSD analysis result
-    const psdResults = analysisResults.filter(r => r.analysis_type === 'psd');
-    const psdResult = psdResults.length > 0 ? psdResults[psdResults.length - 1] : null;
+    // Build plots array from selection
+    let plots: Array<{ plotBase64: string; caption: string; analysisType: string }> = [];
+    let psdResult: any = null;
 
-    if (!psdResult) {
+    if (plotSelectionOrder.length > 0) {
+      // Multi-plot mode: use selected plots in custom order
+      plots = plotSelectionOrder
+        .map(plotId => {
+          const result = analysisResults.find(r => r.id === plotId);
+          if (!result || !result.plot_base64) return null;
+
+          // Generate caption based on analysis type
+          let caption = '';
+          switch (result.analysis_type) {
+            case 'psd':
+              const freqRange = result.parameters?.fmin && result.parameters?.fmax
+                ? `${result.parameters.fmin}-${result.parameters.fmax} Hz`
+                : '';
+              caption = `Power Spectral Density Analysis ${freqRange}`;
+              break;
+            case 'fooof':
+              const fooofRange = result.parameters?.freq_range
+                ? `${result.parameters.freq_range[0]}-${result.parameters.freq_range[1]} Hz`
+                : '';
+              caption = `FOOOF Spectral Parameterization ${fooofRange}`;
+              break;
+            case 'snr':
+              caption = 'Signal-to-Noise Ratio Analysis';
+              break;
+            case 'ssvep':
+              const targetFreq = result.parameters?.target_frequency || '40';
+              caption = `SSVEP Analysis (Target: ${targetFreq} Hz)`;
+              break;
+            default:
+              caption = `${result.analysis_type.toUpperCase()} Analysis`;
+          }
+
+          return {
+            plotBase64: result.plot_base64,
+            caption,
+            analysisType: result.analysis_type
+          };
+        })
+        .filter(plot => plot !== null) as Array<{ plotBase64: string; caption: string; analysisType: string }>;
+
+      // Get first PSD result for legacy fields
+      const psdResults = analysisResults.filter(r => r.analysis_type === 'psd');
+      psdResult = psdResults.length > 0 ? psdResults[psdResults.length - 1] : null;
+    } else {
+      // Backward compatibility: if no plots selected, use last PSD
+      const psdResults = analysisResults.filter(r => r.analysis_type === 'psd');
+      psdResult = psdResults.length > 0 ? psdResults[psdResults.length - 1] : null;
+
+      if (!psdResult) {
+        return null;
+      }
+
+      // Single plot mode (legacy)
+      plots = [{
+        plotBase64: psdResult.plot_base64,
+        caption: 'Power Spectral Density Analysis',
+        analysisType: 'psd'
+      }];
+    }
+
+    // If no plots available, return null
+    if (plots.length === 0 && !psdResult) {
       return null;
     }
+
+    // Use first PSD or first available result for legacy fields
+    const referenceResult = psdResult || analysisResults[0];
 
     return {
       // Patient information (can be extended to accept user input)
@@ -2630,20 +2879,23 @@ export_modified_edf()
 
       // Analysis parameters
       selectedChannels: selectedChannels,
-      timeFrame: psdResult.time_frame ? {
-        start: psdResult.time_frame.start,
-        end: psdResult.time_frame.end,
-        start_real_time: psdResult.time_frame.start_real_time,
-        end_real_time: psdResult.time_frame.end_real_time,
+      timeFrame: referenceResult.time_frame ? {
+        start: referenceResult.time_frame.start,
+        end: referenceResult.time_frame.end,
+        start_real_time: referenceResult.time_frame.start_real_time,
+        end_real_time: referenceResult.time_frame.end_real_time,
       } : undefined,
 
-      // PSD analysis results
-      psdMethod: psdResult.parameters?.method || 'welch',
+      // PSD analysis results (legacy - for backward compatibility)
+      psdMethod: psdResult?.parameters?.method || 'welch',
       frequencyRange: {
-        min: psdResult.parameters?.fmin || 0.5,
-        max: psdResult.parameters?.fmax || 50,
+        min: psdResult?.parameters?.fmin || 0.5,
+        max: psdResult?.parameters?.fmax || 50,
       },
-      psdPlotBase64: psdResult.plot_base64, // The base64 encoded plot
+      psdPlotBase64: psdResult?.plot_base64, // Legacy field
+
+      // Multi-plot support (new)
+      plots: plots,
 
       // Annotations
       annotations: annotations.map(ann => ({
@@ -2824,23 +3076,36 @@ export_modified_edf()
         {analysisResults.map((result, index) => {
           const resultId = index + 10; // Offset to avoid collision with SSVEP (id 0)
           const isCollapsed = collapsedResults.has(resultId);
-          
+          const isSelected = selectedPlotsForReport.includes(result.id || '');
+
           return (
             <div key={index} className="mb-6 border rounded-lg">
               <div className="flex justify-between items-center p-3 bg-gray-50 rounded-t-lg">
-                <h4 className="text-md font-semibold capitalize">
-                  {result.analysis_type.replace('_', ' ')} Analysis
-                  {(result.analysis_type === 'psd' || result.analysis_type === 'snr') && result.parameters?.method && (
-                    <span className="text-sm font-normal text-blue-600 ml-2">
-                      ({result.parameters.method.charAt(0).toUpperCase() + result.parameters.method.slice(1)})
-                    </span>
+                <div className="flex items-center gap-3 flex-1">
+                  {/* Plot selection checkbox */}
+                  {result.plot_base64 && (
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={(e) => handlePlotSelection(result.id || '', e.target.checked)}
+                      className="w-4 h-4 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
+                      title="Include in report"
+                    />
                   )}
-                  {result.time_frame && (
-                    <span className="text-sm font-normal text-gray-600 ml-2">
-                      ({formatTimeHMS(result.time_frame.start) || result.time_frame.start.toFixed(1)+'s'} - {formatTimeHMS(result.time_frame.end) || result.time_frame.end.toFixed(1)+'s'})
-                    </span>
-                  )}
-                </h4>
+                  <h4 className="text-md font-semibold capitalize">
+                    {result.analysis_type.replace('_', ' ')} Analysis
+                    {(result.analysis_type === 'psd' || result.analysis_type === 'snr') && result.parameters?.method && (
+                      <span className="text-sm font-normal text-blue-600 ml-2">
+                        ({result.parameters.method.charAt(0).toUpperCase() + result.parameters.method.slice(1)})
+                      </span>
+                    )}
+                    {result.time_frame && (
+                      <span className="text-sm font-normal text-gray-600 ml-2">
+                        ({formatTimeHMS(result.time_frame.start) || result.time_frame.start.toFixed(1)+'s'} - {formatTimeHMS(result.time_frame.end) || result.time_frame.end.toFixed(1)+'s'})
+                      </span>
+                    )}
+                  </h4>
+                </div>
                 <button
                   onClick={() => toggleCollapse(resultId)}
                   className="px-2 py-1 text-sm bg-white hover:bg-gray-100 rounded flex items-center gap-1"
@@ -3597,6 +3862,26 @@ export_modified_edf()
           <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
             <h2 className="text-2xl font-semibold mb-6">Analysis Tools</h2>
 
+            {/* Plot Styling Options */}
+            <div className="bg-gradient-to-r from-purple-50 to-blue-50 border border-purple-200 rounded-lg p-4 mb-6">
+              <h3 className="text-lg font-semibold mb-3 text-purple-900">🎨 Plot Styling Options</h3>
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  id="useResutilStyle"
+                  checked={useResutilStyle}
+                  onChange={(e) => setUseResutilStyle(e.target.checked)}
+                  className="w-5 h-5 text-purple-600 rounded focus:ring-2 focus:ring-purple-500"
+                />
+                <label htmlFor="useResutilStyle" className="text-sm font-medium text-gray-700 cursor-pointer">
+                  Use Optoceutics Custom Styling (resutil library)
+                </label>
+              </div>
+              <p className="text-xs text-gray-600 mt-2 ml-8">
+                When enabled, all new plots will use custom Optoceutics fonts and color schemes for professional reports.
+              </p>
+            </div>
+
             {/* SSVEP Analysis */}
             <div className="border-b pb-6 mb-6">
               <h3 className="text-xl font-semibold mb-4">🎯 Comprehensive SSVEP Analysis</h3>
@@ -3895,6 +4180,242 @@ export_modified_edf()
                 </div>
               </div>
 
+              {/* FOOOF */}
+              <div className="bg-gray-50 p-4 rounded-lg relative">
+                <h4 className="font-semibold mb-3">🎵 FOOOF Spectral Parameterization</h4>
+                <div className="flex gap-4">
+                  {/* Main FOOOF settings */}
+                  <div className="flex-1">
+                    <div className="mb-3">
+                      <label className="block text-sm font-medium mb-1">Freq Range (Hz):</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="number"
+                          value={fooofParams.freq_range[0]}
+                          onChange={(e) => setFooofParams(prev => ({
+                            ...prev,
+                            freq_range: [parseFloat(e.target.value), prev.freq_range[1]]
+                          }))}
+                          step="0.5"
+                          min="0"
+                          className="w-1/2 p-2 border border-gray-300 rounded text-sm"
+                          placeholder="Min"
+                        />
+                        <input
+                          type="number"
+                          value={fooofParams.freq_range[1]}
+                          onChange={(e) => setFooofParams(prev => ({
+                            ...prev,
+                            freq_range: [prev.freq_range[0], parseFloat(e.target.value)]
+                          }))}
+                          step="0.5"
+                          min="1"
+                          className="w-1/2 p-2 border border-gray-300 rounded text-sm"
+                          placeholder="Max"
+                        />
+                      </div>
+                    </div>
+                    <div className="mb-3">
+                      <label className="block text-sm font-medium mb-1">Max Peaks:</label>
+                      <input
+                        type="number"
+                        value={fooofParams.max_n_peaks}
+                        onChange={(e) => setFooofParams(prev => ({
+                          ...prev,
+                          max_n_peaks: parseInt(e.target.value)
+                        }))}
+                        min="1"
+                        max="12"
+                        className="w-full p-2 border border-gray-300 rounded text-sm"
+                      />
+                    </div>
+                    <div className="mb-3">
+                      <label className="block text-sm font-medium mb-1">Aperiodic Mode:</label>
+                      <div className="flex bg-gray-100 rounded-lg p-1">
+                        <button
+                          onClick={() => setFooofParams(prev => ({
+                            ...prev,
+                            aperiodic_mode: 'fixed'
+                          }))}
+                          className={`flex-1 px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                            fooofParams.aperiodic_mode === 'fixed'
+                              ? 'bg-purple-600 text-white shadow-sm'
+                              : 'text-gray-700 hover:bg-gray-200'
+                          }`}
+                        >
+                          Fixed
+                        </button>
+                        <button
+                          onClick={() => setFooofParams(prev => ({
+                            ...prev,
+                            aperiodic_mode: 'knee'
+                          }))}
+                          className={`flex-1 px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                            fooofParams.aperiodic_mode === 'knee'
+                              ? 'bg-purple-600 text-white shadow-sm'
+                              : 'text-gray-700 hover:bg-gray-200'
+                          }`}
+                        >
+                          Knee
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => runTraditionalAnalysis('fooof')}
+                        disabled={isAnalyzing}
+                        className="flex-1 bg-purple-600 hover:bg-purple-700 text-white py-2 px-4 rounded text-sm disabled:opacity-50 flex items-center justify-center"
+                      >
+                        {isAnalyzing && (
+                          <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white mr-1"></div>
+                        )}
+                        Run FOOOF
+                      </button>
+                      <button
+                        onClick={() => setShowAdvancedFOOOFSettings(!showAdvancedFOOOFSettings)}
+                        className="px-3 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded text-sm font-medium transition-colors"
+                        title="Advanced Settings"
+                      >
+                        ⚙️
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Advanced settings panel */}
+                  {showAdvancedFOOOFSettings && (
+                    <div className="w-64 bg-white border-2 border-purple-200 rounded-lg p-3 shadow-lg">
+                      <div className="flex justify-between items-center mb-3">
+                        <h5 className="font-semibold text-sm">⚙️ Advanced Settings</h5>
+                        <button
+                          onClick={() => setShowAdvancedFOOOFSettings(false)}
+                          className="text-gray-500 hover:text-gray-700 font-bold"
+                        >
+                          ✕
+                        </button>
+                      </div>
+
+                      <div className="mb-3">
+                        <label className="block text-xs font-medium mb-1">Peak Width Limits (Hz):</label>
+                        <div className="flex gap-2">
+                          <input
+                            type="number"
+                            value={fooofParams.peak_width_limits[0]}
+                            onChange={(e) => setFooofParams(prev => ({
+                              ...prev,
+                              peak_width_limits: [parseFloat(e.target.value), prev.peak_width_limits[1]]
+                            }))}
+                            step="0.1"
+                            min="0.1"
+                            className="w-1/2 p-2 border border-gray-300 rounded text-xs"
+                            placeholder="Min"
+                          />
+                          <input
+                            type="number"
+                            value={fooofParams.peak_width_limits[1]}
+                            onChange={(e) => setFooofParams(prev => ({
+                              ...prev,
+                              peak_width_limits: [prev.peak_width_limits[0], parseFloat(e.target.value)]
+                            }))}
+                            step="0.5"
+                            min="0.5"
+                            className="w-1/2 p-2 border border-gray-300 rounded text-xs"
+                            placeholder="Max"
+                          />
+                        </div>
+                        <p className="text-xs text-gray-500 mt-1">Default: 0.5-12 Hz</p>
+                      </div>
+
+                      <div className="mb-3">
+                        <label className="block text-xs font-medium mb-1">Min Peak Height:</label>
+                        <input
+                          type="number"
+                          value={fooofParams.min_peak_height}
+                          onChange={(e) => setFooofParams(prev => ({
+                            ...prev,
+                            min_peak_height: parseFloat(e.target.value)
+                          }))}
+                          step="0.05"
+                          min="0"
+                          max="1"
+                          className="w-full p-2 border border-gray-300 rounded text-xs"
+                        />
+                        <p className="text-xs text-gray-500 mt-1">Default: 0.1</p>
+                      </div>
+
+                      <div className="mb-3">
+                        <label className="block text-xs font-medium mb-1">PSD Window (seconds):</label>
+                        <input
+                          type="number"
+                          value={fooofParams.nperseg_seconds}
+                          onChange={(e) => setFooofParams(prev => ({
+                            ...prev,
+                            nperseg_seconds: parseFloat(e.target.value)
+                          }))}
+                          step="0.5"
+                          min="0.5"
+                          className="w-full p-2 border border-gray-300 rounded text-xs"
+                        />
+                        <p className="text-xs text-gray-500 mt-1">Default: 4s</p>
+                      </div>
+
+                      <div className="mb-3">
+                        <label className="block text-xs font-medium mb-1">PSD Overlap:</label>
+                        <input
+                          type="number"
+                          value={fooofParams.noverlap_proportion}
+                          onChange={(e) => setFooofParams(prev => ({
+                            ...prev,
+                            noverlap_proportion: parseFloat(e.target.value)
+                          }))}
+                          step="0.1"
+                          min="0"
+                          max="1"
+                          className="w-full p-2 border border-gray-300 rounded text-xs"
+                        />
+                        <p className="text-xs text-gray-500 mt-1">Default: 0.5 (50%)</p>
+                      </div>
+
+                      {/* Plot display options */}
+                      <div className="border-t border-purple-200 pt-3 mt-3">
+                        <label className="block text-xs font-semibold mb-2">Plot Display Options:</label>
+
+                        <div className="flex items-center mb-2">
+                          <input
+                            type="checkbox"
+                            id="show-aperiodic"
+                            checked={fooofParams.show_aperiodic}
+                            onChange={(e) => setFooofParams(prev => ({
+                              ...prev,
+                              show_aperiodic: e.target.checked
+                            }))}
+                            className="mr-2 h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded"
+                          />
+                          <label htmlFor="show-aperiodic" className="text-xs text-gray-700">
+                            Show Aperiodic (1/f) Component
+                          </label>
+                        </div>
+
+                        <div className="flex items-center">
+                          <input
+                            type="checkbox"
+                            id="show-periodic"
+                            checked={fooofParams.show_periodic}
+                            onChange={(e) => setFooofParams(prev => ({
+                              ...prev,
+                              show_periodic: e.target.checked
+                            }))}
+                            className="mr-2 h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded"
+                          />
+                          <label htmlFor="show-periodic" className="text-xs text-gray-700">
+                            Show Periodic Component
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
               {/* SNR */}
               <div className="bg-gray-50 p-4 rounded-lg">
                 <h4 className="font-semibold mb-3">📊 Signal-to-Noise Ratio</h4>
@@ -4166,21 +4687,94 @@ export_modified_edf()
         {renderSSVEPResults()}
         {renderAnalysisResults()}
 
+        {/* Plot Selection Panel for Reports */}
+        {plotSelectionOrder.length > 0 && (
+          <div className="bg-white rounded-lg shadow-lg p-6 mt-4">
+            <h3 className="text-lg font-bold mb-4">📊 Selected Plots for Report</h3>
+            <p className="text-gray-600 mb-4 text-sm">
+              Use the buttons below to reorder the plots. They will appear in this order in the generated report.
+            </p>
+            <div className="space-y-2">
+              {plotSelectionOrder.map((plotId, index) => {
+                const result = analysisResults.find(r => r.id === plotId);
+                if (!result) return null;
+
+                return (
+                  <div key={plotId} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border">
+                    <span className="font-semibold text-gray-700 min-w-[24px]">{index + 1}.</span>
+                    <div className="flex-1">
+                      <span className="font-medium capitalize">
+                        {result.analysis_type.replace('_', ' ')} Analysis
+                      </span>
+                      {result.parameters?.freq_range && (
+                        <span className="text-sm text-gray-600 ml-2">
+                          ({result.parameters.freq_range[0]}-{result.parameters.freq_range[1]} Hz)
+                        </span>
+                      )}
+                      {result.parameters?.fmin && result.parameters?.fmax && (
+                        <span className="text-sm text-gray-600 ml-2">
+                          ({result.parameters.fmin}-{result.parameters.fmax} Hz)
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => movePlotUp(plotId)}
+                        disabled={index === 0}
+                        className="px-3 py-1 text-sm bg-blue-100 hover:bg-blue-200 disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed text-blue-700 rounded transition-colors"
+                        title="Move up"
+                      >
+                        ▲
+                      </button>
+                      <button
+                        onClick={() => movePlotDown(plotId)}
+                        disabled={index === plotSelectionOrder.length - 1}
+                        className="px-3 py-1 text-sm bg-blue-100 hover:bg-blue-200 disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed text-blue-700 rounded transition-colors"
+                        title="Move down"
+                      >
+                        ▼
+                      </button>
+                      <button
+                        onClick={() => handlePlotSelection(plotId, false)}
+                        className="px-3 py-1 text-sm bg-red-100 hover:bg-red-200 text-red-700 rounded transition-colors"
+                        title="Remove from report"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Generate Patient Report PDF */}
-        {analysisResults.some(r => r.analysis_type === 'psd') && (
+        {(analysisResults.some(r => r.analysis_type === 'psd') || plotSelectionOrder.length > 0) && (
           <div className="bg-white rounded-lg shadow-lg p-6 mt-4">
             <h3 className="text-lg font-bold mb-4">📄 Patient Report Generation</h3>
             <p className="text-gray-600 mb-4">
-              Generate a comprehensive patient report PDF using the PSD analysis results.
-              The report will include recording information, analysis parameters, frequency bands,
-              and the Power Spectral Density plot for the selected time interval.
+              Generate a comprehensive patient report using your analysis results.
+              {plotSelectionOrder.length > 0 ? (
+                <span className="font-semibold text-blue-700">
+                  {' '}Your report will include {plotSelectionOrder.length} selected plot{plotSelectionOrder.length > 1 ? 's' : ''} in the custom order shown above.
+                </span>
+              ) : (
+                <span>
+                  {' '}Tip: Check the boxes next to plots above to include them in your report with custom ordering.
+                </span>
+              )}
             </p>
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
               <h4 className="font-semibold text-blue-900 mb-2">Report will include:</h4>
               <ul className="list-disc list-inside text-sm text-blue-800 space-y-1">
                 <li>Patient and recording information</li>
                 <li>Selected time frame and analysis parameters</li>
-                <li>PSD plot for &quot;During 40 Hz Visual Stimulation with EVY Light&quot; section</li>
+                {plotSelectionOrder.length > 0 ? (
+                  <li>{plotSelectionOrder.length} selected plot{plotSelectionOrder.length > 1 ? 's' : ''} with captions in custom order</li>
+                ) : (
+                  <li>Most recent PSD analysis plot (default)</li>
+                )}
                 <li>Channel information and annotations</li>
                 <li>Analysis summary</li>
               </ul>
