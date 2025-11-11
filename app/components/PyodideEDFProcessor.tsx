@@ -168,6 +168,30 @@ export default function PyodideEDFProcessor() {
   const [comparisonTraces, setComparisonTraces] = useState<ComparisonTrace[]>([]);
   const [comparisonPlots, setComparisonPlots] = useState<ComparisonPlot[]>([]);
 
+  // Trace builder form state
+  const [traceBuilderFileId, setTraceBuilderFileId] = useState<string>('');
+  const [traceBuilderChannel, setTraceBuilderChannel] = useState<string>('');
+  const [traceBuilderUseTimeFrame, setTraceBuilderUseTimeFrame] = useState<boolean>(false);
+  const [traceBuilderTimeStart, setTraceBuilderTimeStart] = useState<number>(0);
+  const [traceBuilderTimeEnd, setTraceBuilderTimeEnd] = useState<number>(0);
+  const [traceBuilderLabel, setTraceBuilderLabel] = useState<string>('');
+  const [traceBuilderColor, setTraceBuilderColor] = useState<string>('');
+  const [editingTraceId, setEditingTraceId] = useState<string | null>(null);
+
+  // Comparison PSD parameters
+  const [comparisonPsdParams, setComparisonPsdParams] = useState({
+    method: 'welch' as 'welch' | 'periodogram',
+    fmin: 0.5,
+    fmax: 50,
+    nperseg_seconds: 4,
+    noverlap_proportion: 0.5,
+    window: 'hamming'
+  });
+
+  // Current comparison plot and name
+  const [currentComparisonPlot, setCurrentComparisonPlot] = useState<string>('');
+  const [comparisonPlotName, setComparisonPlotName] = useState<string>('');
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pyodideRef = useRef<any>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
@@ -2836,6 +2860,154 @@ export_modified_edf()
     ));
   }, []);
 
+  // Trace builder helper functions
+  const resetTraceBuilder = useCallback(() => {
+    setTraceBuilderFileId('');
+    setTraceBuilderChannel('');
+    setTraceBuilderUseTimeFrame(false);
+    setTraceBuilderTimeStart(0);
+    setTraceBuilderTimeEnd(0);
+    setTraceBuilderLabel('');
+    setTraceBuilderColor('');
+    setEditingTraceId(null);
+  }, []);
+
+  const addOrUpdateTrace = useCallback(() => {
+    if (!traceBuilderFileId || !traceBuilderChannel) {
+      setError('Please select a file and channel for the trace');
+      return;
+    }
+
+    const selectedFile = loadedFiles.find(f => f.id === traceBuilderFileId);
+    if (!selectedFile) return;
+
+    // Generate smart default label if not provided
+    const defaultLabel = traceBuilderLabel ||
+      `${selectedFile.nickname} - ${traceBuilderChannel}${
+        traceBuilderUseTimeFrame ? ` (${traceBuilderTimeStart.toFixed(1)}-${traceBuilderTimeEnd.toFixed(1)}s)` : ''
+      }`;
+
+    const trace: ComparisonTrace = {
+      id: editingTraceId || `trace_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      fileId: traceBuilderFileId,
+      channel: traceBuilderChannel,
+      label: defaultLabel,
+      timeFrame: traceBuilderUseTimeFrame ? {
+        start: traceBuilderTimeStart,
+        end: traceBuilderTimeEnd
+      } : undefined,
+      color: traceBuilderColor || undefined
+    };
+
+    if (editingTraceId) {
+      // Update existing trace
+      setComparisonTraces(prev => prev.map(t => t.id === editingTraceId ? trace : t));
+      setSuccess(`Updated trace: ${defaultLabel}`);
+    } else {
+      // Add new trace
+      setComparisonTraces(prev => [...prev, trace]);
+      setSuccess(`Added trace: ${defaultLabel}`);
+    }
+
+    resetTraceBuilder();
+  }, [
+    traceBuilderFileId,
+    traceBuilderChannel,
+    traceBuilderUseTimeFrame,
+    traceBuilderTimeStart,
+    traceBuilderTimeEnd,
+    traceBuilderLabel,
+    traceBuilderColor,
+    editingTraceId,
+    loadedFiles,
+    resetTraceBuilder
+  ]);
+
+  const editTrace = useCallback((traceId: string) => {
+    const trace = comparisonTraces.find(t => t.id === traceId);
+    if (!trace) return;
+
+    setTraceBuilderFileId(trace.fileId);
+    setTraceBuilderChannel(trace.channel);
+    setTraceBuilderLabel(trace.label);
+    setTraceBuilderColor(trace.color || '');
+
+    if (trace.timeFrame) {
+      setTraceBuilderUseTimeFrame(true);
+      setTraceBuilderTimeStart(trace.timeFrame.start);
+      setTraceBuilderTimeEnd(trace.timeFrame.end);
+    } else {
+      setTraceBuilderUseTimeFrame(false);
+      setTraceBuilderTimeStart(0);
+      setTraceBuilderTimeEnd(0);
+    }
+
+    setEditingTraceId(traceId);
+  }, [comparisonTraces]);
+
+  const removeTrace = useCallback((traceId: string) => {
+    setComparisonTraces(prev => prev.filter(t => t.id !== traceId));
+    if (editingTraceId === traceId) {
+      resetTraceBuilder();
+    }
+  }, [editingTraceId, resetTraceBuilder]);
+
+  const moveTraceUp = useCallback((traceId: string) => {
+    setComparisonTraces(prev => {
+      const index = prev.findIndex(t => t.id === traceId);
+      if (index <= 0) return prev;
+      const newTraces = [...prev];
+      [newTraces[index - 1], newTraces[index]] = [newTraces[index], newTraces[index - 1]];
+      return newTraces;
+    });
+  }, []);
+
+  const moveTraceDown = useCallback((traceId: string) => {
+    setComparisonTraces(prev => {
+      const index = prev.findIndex(t => t.id === traceId);
+      if (index < 0 || index >= prev.length - 1) return prev;
+      const newTraces = [...prev];
+      [newTraces[index], newTraces[index + 1]] = [newTraces[index + 1], newTraces[index]];
+      return newTraces;
+    });
+  }, []);
+
+  const saveComparisonPlot = useCallback(() => {
+    if (!currentComparisonPlot || !comparisonPlotName.trim()) {
+      setError('Please provide a name for the comparison plot');
+      return;
+    }
+
+    const comparisonPlot: ComparisonPlot = {
+      id: `comparison_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      name: comparisonPlotName,
+      traces: [...comparisonTraces],
+      parameters: { ...comparisonPsdParams },
+      plotBase64: currentComparisonPlot,
+      createdAt: new Date()
+    };
+
+    setComparisonPlots(prev => [...prev, comparisonPlot]);
+    setSuccess(`Saved comparison plot: ${comparisonPlotName}`);
+
+    // Reset for next comparison
+    setComparisonPlotName('');
+    setCurrentComparisonPlot('');
+    setComparisonTraces([]);
+    setComparisonMode(false);
+  }, [currentComparisonPlot, comparisonPlotName, comparisonTraces, comparisonPsdParams]);
+
+  const deleteComparisonPlot = useCallback((plotId: string) => {
+    const plot = comparisonPlots.find(p => p.id === plotId);
+    if (!plot) return;
+
+    const confirmed = window.confirm(`Delete comparison plot "${plot.name}"?`);
+    if (!confirmed) return;
+
+    setComparisonPlots(prev => prev.filter(p => p.id !== plotId));
+    setSuccess(`Deleted comparison plot: ${plot.name}`);
+  }, [comparisonPlots]);
+
   const runSSVEPAnalysis = async () => {
     if (!pyodideReady || !currentFile) {
       setError('File not loaded or Python environment not ready');
@@ -3669,6 +3841,547 @@ export_modified_edf()
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Comparison Builder - Only shown when multiple files are loaded */}
+        {loadedFiles.length >= 2 && (
+          <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-semibold">PSD Comparison Builder</h3>
+                <p className="text-sm text-gray-600">Compare power spectra from multiple files or time periods</p>
+              </div>
+              <button
+                onClick={() => {
+                  setComparisonMode(!comparisonMode);
+                  if (!comparisonMode) {
+                    // Entering comparison mode - reset traces
+                    setComparisonTraces([]);
+                    resetTraceBuilder();
+                  }
+                }}
+                className={`px-4 py-2 rounded font-medium transition-colors ${
+                  comparisonMode
+                    ? 'bg-red-600 hover:bg-red-700 text-white'
+                    : 'bg-purple-600 hover:bg-purple-700 text-white'
+                }`}
+              >
+                {comparisonMode ? 'Exit Comparison Mode' : 'Enter Comparison Mode'}
+              </button>
+            </div>
+
+            {comparisonMode && (
+              <div className="space-y-6">
+                {/* Trace Builder Form */}
+                <div className="border border-purple-200 rounded-lg p-4 bg-purple-50">
+                  <h4 className="font-semibold mb-3 text-purple-900">
+                    {editingTraceId ? 'Edit Trace' : 'Add New Trace'}
+                  </h4>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* File Selection */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        File *
+                      </label>
+                      <select
+                        value={traceBuilderFileId}
+                        onChange={(e) => {
+                          setTraceBuilderFileId(e.target.value);
+                          const file = loadedFiles.find(f => f.id === e.target.value);
+                          if (file && file.metadata.channel_names && file.metadata.channel_names.length > 0) {
+                            setTraceBuilderChannel(file.metadata.channel_names[0]);
+                          }
+                          if (file && file.metadata.duration_seconds) {
+                            setTraceBuilderTimeEnd(file.metadata.duration_seconds);
+                          }
+                        }}
+                        className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      >
+                        <option value="">Select a file...</option>
+                        {loadedFiles.map(file => (
+                          <option key={file.id} value={file.id}>
+                            {file.nickname} ({file.metadata.filename})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Channel Selection */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Channel *
+                      </label>
+                      <select
+                        value={traceBuilderChannel}
+                        onChange={(e) => setTraceBuilderChannel(e.target.value)}
+                        disabled={!traceBuilderFileId}
+                        className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:bg-gray-100"
+                      >
+                        <option value="">Select a channel...</option>
+                        {traceBuilderFileId &&
+                          loadedFiles
+                            .find(f => f.id === traceBuilderFileId)
+                            ?.metadata.channel_names?.map(channel => (
+                              <option key={channel} value={channel}>
+                                {channel}
+                              </option>
+                            ))}
+                      </select>
+                    </div>
+
+                    {/* Time Frame Toggle */}
+                    <div className="md:col-span-2">
+                      <label className="flex items-center space-x-2">
+                        <input
+                          type="checkbox"
+                          checked={traceBuilderUseTimeFrame}
+                          onChange={(e) => setTraceBuilderUseTimeFrame(e.target.checked)}
+                          className="rounded text-purple-600 focus:ring-purple-500"
+                        />
+                        <span className="text-sm font-medium text-gray-700">
+                          Use custom time window (optional)
+                        </span>
+                      </label>
+                    </div>
+
+                    {/* Time Window */}
+                    {traceBuilderUseTimeFrame && (
+                      <>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Start Time (seconds)
+                          </label>
+                          <input
+                            type="number"
+                            value={traceBuilderTimeStart}
+                            onChange={(e) => setTraceBuilderTimeStart(parseFloat(e.target.value))}
+                            min={0}
+                            max={traceBuilderTimeEnd}
+                            step={0.1}
+                            className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            End Time (seconds)
+                          </label>
+                          <input
+                            type="number"
+                            value={traceBuilderTimeEnd}
+                            onChange={(e) => setTraceBuilderTimeEnd(parseFloat(e.target.value))}
+                            min={traceBuilderTimeStart}
+                            max={
+                              traceBuilderFileId
+                                ? loadedFiles.find(f => f.id === traceBuilderFileId)?.metadata.duration_seconds || 100
+                                : 100
+                            }
+                            step={0.1}
+                            className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          />
+                        </div>
+                      </>
+                    )}
+
+                    {/* Legend Label */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Legend Label (optional)
+                      </label>
+                      <input
+                        type="text"
+                        value={traceBuilderLabel}
+                        onChange={(e) => setTraceBuilderLabel(e.target.value)}
+                        placeholder="Auto-generated if left empty"
+                        className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      />
+                    </div>
+
+                    {/* Color Picker */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Line Color (optional)
+                      </label>
+                      <div className="flex space-x-2">
+                        <input
+                          type="color"
+                          value={traceBuilderColor || '#3B82F6'}
+                          onChange={(e) => setTraceBuilderColor(e.target.value)}
+                          className="h-10 w-16 border border-gray-300 rounded cursor-pointer"
+                        />
+                        <input
+                          type="text"
+                          value={traceBuilderColor}
+                          onChange={(e) => setTraceBuilderColor(e.target.value)}
+                          placeholder="#RRGGBB (auto if empty)"
+                          className="flex-1 px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="flex justify-end space-x-2 mt-4">
+                    {editingTraceId && (
+                      <button
+                        onClick={resetTraceBuilder}
+                        className="px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded transition-colors"
+                      >
+                        Cancel Edit
+                      </button>
+                    )}
+                    <button
+                      onClick={addOrUpdateTrace}
+                      disabled={!traceBuilderFileId || !traceBuilderChannel}
+                      className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      {editingTraceId ? 'Update Trace' : 'Add Trace'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Configured Traces List */}
+                {comparisonTraces.length > 0 && (
+                  <div className="border border-gray-300 rounded-lg p-4">
+                    <h4 className="font-semibold mb-3">
+                      Configured Traces ({comparisonTraces.length})
+                    </h4>
+                    <div className="space-y-2">
+                      {comparisonTraces.map((trace, index) => {
+                        const traceFile = loadedFiles.find(f => f.id === trace.fileId);
+                        return (
+                          <div
+                            key={trace.id}
+                            className="flex items-center justify-between p-3 bg-gray-50 rounded border border-gray-200"
+                          >
+                            <div className="flex items-center space-x-3 flex-1">
+                              {/* Color indicator */}
+                              {trace.color && (
+                                <div
+                                  className="w-4 h-4 rounded-full border border-gray-300"
+                                  style={{ backgroundColor: trace.color }}
+                                />
+                              )}
+                              <div className="flex-1 min-w-0">
+                                <p className="font-medium text-sm truncate">{trace.label}</p>
+                                <p className="text-xs text-gray-600">
+                                  {traceFile?.nickname} • {trace.channel}
+                                  {trace.timeFrame &&
+                                    ` • ${trace.timeFrame.start.toFixed(1)}-${trace.timeFrame.end.toFixed(1)}s`}
+                                </p>
+                              </div>
+                            </div>
+
+                            {/* Action buttons */}
+                            <div className="flex items-center space-x-1">
+                              <button
+                                onClick={() => moveTraceUp(trace.id)}
+                                disabled={index === 0}
+                                className="p-1 text-gray-600 hover:text-gray-800 disabled:opacity-30 disabled:cursor-not-allowed"
+                                title="Move up"
+                              >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                                </svg>
+                              </button>
+                              <button
+                                onClick={() => moveTraceDown(trace.id)}
+                                disabled={index === comparisonTraces.length - 1}
+                                className="p-1 text-gray-600 hover:text-gray-800 disabled:opacity-30 disabled:cursor-not-allowed"
+                                title="Move down"
+                              >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                </svg>
+                              </button>
+                              <button
+                                onClick={() => editTrace(trace.id)}
+                                className="p-1 text-blue-600 hover:text-blue-800"
+                                title="Edit"
+                              >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                </svg>
+                              </button>
+                              <button
+                                onClick={() => removeTrace(trace.id)}
+                                className="p-1 text-red-600 hover:text-red-800"
+                                title="Remove"
+                              >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* PSD Parameters for Comparison */}
+                {comparisonTraces.length > 0 && (
+                  <div className="border border-blue-200 rounded-lg p-4 bg-blue-50">
+                    <h4 className="font-semibold mb-3 text-blue-900">
+                      PSD Parameters (Shared Across All Traces)
+                    </h4>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      {/* Method */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Method
+                        </label>
+                        <select
+                          value={comparisonPsdParams.method}
+                          onChange={(e) =>
+                            setComparisonPsdParams({
+                              ...comparisonPsdParams,
+                              method: e.target.value as 'welch' | 'periodogram'
+                            })
+                          }
+                          className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                          <option value="welch">Welch</option>
+                          <option value="periodogram">Periodogram</option>
+                        </select>
+                      </div>
+
+                      {/* Frequency Min */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Min Frequency (Hz)
+                        </label>
+                        <input
+                          type="number"
+                          value={comparisonPsdParams.fmin}
+                          onChange={(e) =>
+                            setComparisonPsdParams({
+                              ...comparisonPsdParams,
+                              fmin: parseFloat(e.target.value)
+                            })
+                          }
+                          min={0}
+                          step={0.1}
+                          className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+
+                      {/* Frequency Max */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Max Frequency (Hz)
+                        </label>
+                        <input
+                          type="number"
+                          value={comparisonPsdParams.fmax}
+                          onChange={(e) =>
+                            setComparisonPsdParams({
+                              ...comparisonPsdParams,
+                              fmax: parseFloat(e.target.value)
+                            })
+                          }
+                          min={comparisonPsdParams.fmin}
+                          step={0.1}
+                          className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+
+                      {/* Welch-specific parameters */}
+                      {comparisonPsdParams.method === 'welch' && (
+                        <>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              Window Size (seconds)
+                            </label>
+                            <input
+                              type="number"
+                              value={comparisonPsdParams.nperseg_seconds}
+                              onChange={(e) =>
+                                setComparisonPsdParams({
+                                  ...comparisonPsdParams,
+                                  nperseg_seconds: parseFloat(e.target.value)
+                                })
+                              }
+                              min={0.1}
+                              step={0.1}
+                              className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              Overlap Proportion
+                            </label>
+                            <input
+                              type="number"
+                              value={comparisonPsdParams.noverlap_proportion}
+                              onChange={(e) =>
+                                setComparisonPsdParams({
+                                  ...comparisonPsdParams,
+                                  noverlap_proportion: parseFloat(e.target.value)
+                                })
+                              }
+                              min={0}
+                              max={0.99}
+                              step={0.05}
+                              className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              Window Type
+                            </label>
+                            <select
+                              value={comparisonPsdParams.window}
+                              onChange={(e) =>
+                                setComparisonPsdParams({
+                                  ...comparisonPsdParams,
+                                  window: e.target.value
+                                })
+                              }
+                              className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            >
+                              <option value="hamming">Hamming</option>
+                              <option value="hann">Hann</option>
+                              <option value="blackman">Blackman</option>
+                              <option value="bartlett">Bartlett</option>
+                            </select>
+                          </div>
+                        </>
+                      )}
+
+                      {/* Resutil styling toggle */}
+                      <div className="md:col-span-3">
+                        <label className="flex items-center space-x-2">
+                          <input
+                            type="checkbox"
+                            checked={useResutilStyle}
+                            onChange={(e) => setUseResutilStyle(e.target.checked)}
+                            className="rounded text-blue-600 focus:ring-blue-500"
+                          />
+                          <span className="text-sm font-medium text-gray-700">
+                            Use Optoceutics custom styling (resutil)
+                          </span>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Generate Comparison Plot Button */}
+                {comparisonTraces.length >= 2 && (
+                  <div className="text-center">
+                    <button
+                      onClick={() => {
+                        // This will be implemented in Phase 3
+                        setError('Comparison plot generation will be implemented in Phase 3 (Python integration)');
+                      }}
+                      disabled={isAnalyzing}
+                      className="px-6 py-3 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white font-semibold rounded-lg shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                    >
+                      Generate Comparison Plot ({comparisonTraces.length} traces)
+                    </button>
+                    <p className="text-xs text-gray-600 mt-2">
+                      Minimum 2 traces required for comparison
+                    </p>
+                  </div>
+                )}
+
+                {/* Current Comparison Plot Display */}
+                {currentComparisonPlot && (
+                  <div className="border border-green-200 rounded-lg p-4 bg-green-50">
+                    <h4 className="font-semibold mb-3 text-green-900">Generated Comparison Plot</h4>
+                    <img
+                      src={`data:image/png;base64,${currentComparisonPlot}`}
+                      alt="Comparison PSD Plot"
+                      className="w-full rounded border border-gray-300 mb-3"
+                    />
+
+                    {/* Save comparison plot */}
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="text"
+                        value={comparisonPlotName}
+                        onChange={(e) => setComparisonPlotName(e.target.value)}
+                        placeholder="Enter comparison name..."
+                        className="flex-1 px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-green-500"
+                      />
+                      <button
+                        onClick={saveComparisonPlot}
+                        disabled={!comparisonPlotName.trim()}
+                        className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        Save Comparison
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Saved Comparison Plots */}
+        {comparisonPlots.length > 0 && (
+          <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+            <h3 className="text-lg font-semibold mb-4">Saved Comparison Plots ({comparisonPlots.length})</h3>
+            <div className="space-y-3">
+              {comparisonPlots.map(plot => (
+                <div key={plot.id} className="border border-gray-200 rounded-lg p-4 hover:border-purple-300 transition-colors">
+                  <div className="flex items-start justify-between mb-2">
+                    <div className="flex-1">
+                      <h4 className="font-semibold text-gray-900">{plot.name}</h4>
+                      <p className="text-sm text-gray-600">
+                        {plot.traces.length} traces • {plot.parameters.method} • {plot.parameters.fmin}-{plot.parameters.fmax} Hz
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        Created: {new Date(plot.createdAt).toLocaleString()}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => deleteComparisonPlot(plot.id)}
+                      className="text-red-600 hover:text-red-800"
+                      title="Delete"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  </div>
+
+                  {/* Collapsible plot preview */}
+                  <details className="mt-2">
+                    <summary className="cursor-pointer text-sm text-blue-600 hover:text-blue-800">
+                      View plot and details
+                    </summary>
+                    <div className="mt-3 space-y-2">
+                      <img
+                        src={`data:image/png;base64,${plot.plotBase64}`}
+                        alt={plot.name}
+                        className="w-full rounded border border-gray-300"
+                      />
+                      <div className="text-xs text-gray-700">
+                        <p className="font-semibold mb-1">Traces:</p>
+                        <ul className="list-disc list-inside space-y-1">
+                          {plot.traces.map(trace => {
+                            const traceFile = loadedFiles.find(f => f.id === trace.fileId);
+                            return (
+                              <li key={trace.id}>
+                                {trace.label} ({traceFile?.nickname || 'Unknown file'} - {trace.channel})
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
+                    </div>
+                  </details>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
