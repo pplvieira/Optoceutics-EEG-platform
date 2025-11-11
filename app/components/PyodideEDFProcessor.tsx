@@ -3040,10 +3040,13 @@ export_modified_edf()
     setLoadingMessage('Generating comparison PSD plot...');
 
     try {
-      // Prepare traces configuration
-      const tracesConfig = [];
+      // Prepare traces - we need to set file bytes separately for each trace
+      // because Pyodide doesn't handle nested Uint8Arrays well
+      const traceMetadata = [];
 
-      for (const trace of comparisonTraces) {
+      for (let idx = 0; idx < comparisonTraces.length; idx++) {
+        const trace = comparisonTraces[idx];
+
         // Find the file
         const loadedFile = loadedFiles.find(f => f.id === trace.fileId);
         if (!loadedFile) {
@@ -3055,9 +3058,12 @@ export_modified_edf()
         const arrayBuffer = await loadedFile.file.arrayBuffer();
         const uint8Array = new Uint8Array(arrayBuffer);
 
-        // Create trace configuration
-        const traceConfig: any = {
-          file_bytes: uint8Array,
+        // Set this file's bytes in Python globals with unique name
+        pyodideRef.current.globals.set(`file_bytes_${idx}`, uint8Array);
+
+        // Create trace metadata (without the binary data)
+        const traceMeta: any = {
+          file_bytes_var: `file_bytes_${idx}`,
           filename: loadedFile.file.name,
           channel: trace.channel,
           label: trace.label
@@ -3065,37 +3071,67 @@ export_modified_edf()
 
         // Add time window if specified
         if (trace.timeFrame) {
-          traceConfig.time_start = trace.timeFrame.start;
-          traceConfig.time_end = trace.timeFrame.end;
+          traceMeta.time_start = trace.timeFrame.start;
+          traceMeta.time_end = trace.timeFrame.end;
         }
 
         // Add color if specified
         if (trace.color) {
-          traceConfig.color = trace.color;
+          traceMeta.color = trace.color;
         }
 
-        tracesConfig.push(traceConfig);
+        traceMetadata.push(traceMeta);
       }
 
-      if (tracesConfig.length < 2) {
+      if (traceMetadata.length < 2) {
         setError('Could not load data for enough traces (minimum 2 required)');
         setIsAnalyzing(false);
         setLoadingMessage('');
         return;
       }
 
-      // Set traces config in Python globals
-      pyodideRef.current.globals.set('comparison_traces_config', tracesConfig);
+      // Set metadata and params in Python globals
+      pyodideRef.current.globals.set('traces_metadata', traceMetadata);
       pyodideRef.current.globals.set('comparison_psd_params', comparisonPsdParams);
       pyodideRef.current.globals.set('use_resutil_style', useResutilStyle);
 
-      // Call Python function
+      // Build traces config in Python by converting bytes and merging with metadata
       const result = await pyodideRef.current.runPythonAsync(`
 import json
 
+# Build traces config by converting JS bytes to Python bytes
+traces_config = []
+for trace_meta in traces_metadata:
+    # Get the file bytes variable name
+    file_bytes_var = trace_meta['file_bytes_var']
+
+    # Convert JS Uint8Array to Python bytes
+    js_bytes = globals()[file_bytes_var]
+    py_bytes = bytes(js_bytes)
+
+    # Build trace config with Python bytes
+    trace_config = {
+        'file_bytes': py_bytes,
+        'filename': trace_meta['filename'],
+        'channel': trace_meta['channel'],
+        'label': trace_meta['label']
+    }
+
+    # Add optional fields
+    if 'time_start' in trace_meta:
+        trace_config['time_start'] = trace_meta['time_start']
+    if 'time_end' in trace_meta:
+        trace_config['time_end'] = trace_meta['time_end']
+    if 'color' in trace_meta:
+        trace_config['color'] = trace_meta['color']
+
+    traces_config.append(trace_config)
+
+print(f"Built {len(traces_config)} trace configurations")
+
 # Call the comparison PSD function
 result_json = generate_comparison_psd(
-    comparison_traces_config,
+    traces_config,
     comparison_psd_params,
     use_resutil_style
 )
