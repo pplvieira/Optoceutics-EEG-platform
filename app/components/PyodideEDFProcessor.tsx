@@ -263,29 +263,132 @@ export default function PyodideEDFProcessor() {
       }
 
       // Install resutil for custom Optoceutics plot styling
-      // Use the full resutil library from local wheel
+      // Multi-stage fallback approach to handle dependency issues
+      let resutilInstalled = false;
+
       try {
         setLoadingMessage('Installing resutil (Optoceutics styling library)...');
         const micropip = pyodide.pyimport("micropip");
 
-        // Install markdown dependency (required by resutil)
+        // Install markdown dependency (required by resutil core)
         await micropip.install(['markdown']);
         console.log('Markdown library installed');
 
-        // Install resutil from local wheel (includes fonts and style files)
-        await micropip.install('/pyodide-packages/resutil-0.4.0-py3-none-any.whl');
+        // Stage 1: Try installing with keep_going=True (ignores missing optional dependencies)
+        try {
+          setLoadingMessage('Installing resutil from local wheel (Stage 1)...');
+          await pyodide.runPythonAsync(`
+import micropip
+await micropip.install('/pyodide-packages/resutil-0.4.0-py3-none-any.whl', keep_going=True)
+`);
 
-        setLoadingMessage('Resutil library installed successfully');
-        console.log('Resutil library installed from local wheel');
-
-        // Import and verify it works
-        await pyodide.runPythonAsync(`
+          // Verify it works
+          await pyodide.runPythonAsync(`
 import resutil
 from resutil import plotlib
-print("✓ Resutil (v0.4.0) loaded successfully with plotlib module")
+print("✓ Resutil (v0.4.0) loaded successfully with plotlib module (Stage 1)")
 `);
+          resutilInstalled = true;
+          console.log('Resutil installed successfully (Stage 1: keep_going=True)');
+        } catch (stage1Error) {
+          console.warn('Stage 1 failed, trying Stage 2 (manual extraction)...', stage1Error);
+
+          // Stage 2: Manual wheel extraction (bypass micropip completely)
+          try {
+            setLoadingMessage('Installing resutil via manual extraction (Stage 2)...');
+
+            // Fetch the wheel file
+            const wheelResponse = await fetch('/pyodide-packages/resutil-0.4.0-py3-none-any.whl');
+            if (!wheelResponse.ok) {
+              throw new Error(`Failed to fetch wheel: ${wheelResponse.status}`);
+            }
+            const wheelBytes = await wheelResponse.arrayBuffer();
+
+            // Write to Pyodide filesystem
+            pyodide.FS.writeFile('/tmp/resutil.whl', new Uint8Array(wheelBytes));
+
+            // Extract and install manually
+            await pyodide.runPythonAsync(`
+import sys
+import zipfile
+import os
+
+# Extract wheel to temporary directory
+wheel_path = '/tmp/resutil.whl'
+extract_path = '/tmp/resutil_pkg'
+
+# Create extraction directory
+if os.path.exists(extract_path):
+    import shutil
+    shutil.rmtree(extract_path)
+os.makedirs(extract_path)
+
+# Unzip the wheel
+with zipfile.ZipFile(wheel_path, 'r') as zip_ref:
+    zip_ref.extractall(extract_path)
+
+# Add to sys.path (highest priority)
+if extract_path not in sys.path:
+    sys.path.insert(0, extract_path)
+
+# Verify resutil is importable
+import resutil
+from resutil import plotlib
+print(f"✓ Resutil (v0.4.0) loaded successfully with plotlib module (Stage 2: manual extraction)")
+print(f"  Loaded from: {resutil.__file__}")
+`);
+            resutilInstalled = true;
+            console.log('Resutil installed successfully (Stage 2: manual extraction)');
+          } catch (stage2Error) {
+            console.warn('Stage 2 failed, trying Stage 3 (lightweight module)...', stage2Error);
+
+            // Stage 3: Use lightweight custom module as ultimate fallback
+            try {
+              setLoadingMessage('Loading lightweight styling module (Stage 3)...');
+
+              const resutilResponse = await fetch('/python-packages/resutil_oc.py');
+              if (!resutilResponse.ok) {
+                throw new Error(`Failed to fetch resutil_oc.py: ${resutilResponse.status}`);
+              }
+              const resutilCode = await resutilResponse.text();
+
+              await pyodide.runPythonAsync(`
+import sys
+from types import ModuleType
+
+# Create resutil module
+resutil = ModuleType('resutil')
+
+# Create plotlib submodule
+plotlib = ModuleType('plotlib')
+
+# Execute the lightweight code in plotlib's namespace
+exec('''${resutilCode.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}''', plotlib.__dict__)
+
+# Add plotlib to resutil
+resutil.plotlib = plotlib
+
+# Add to sys.modules
+sys.modules['resutil'] = resutil
+sys.modules['resutil.plotlib'] = plotlib
+
+print("✓ Resutil loaded successfully with lightweight plotlib module (Stage 3: fallback)")
+`);
+              resutilInstalled = true;
+              console.log('Resutil installed successfully (Stage 3: lightweight fallback)');
+            } catch (stage3Error) {
+              console.error('All stages failed:', stage3Error);
+              throw stage3Error;
+            }
+          }
+        }
+
+        if (resutilInstalled) {
+          setLoadingMessage('Resutil library ready');
+          console.log('Resutil installation complete and verified');
+        }
       } catch (error) {
-        console.warn('Resutil installation failed (will use default matplotlib styling):', error);
+        console.warn('Resutil installation failed completely (will use default matplotlib styling):', error);
         setLoadingMessage('Using default matplotlib styling');
       }
 
