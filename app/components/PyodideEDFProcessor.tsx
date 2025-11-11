@@ -2,7 +2,7 @@
 
 /* eslint-disable @next/next/no-img-element */
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { generatePatientReportPDF, generatePatientReportDOCX, downloadPDF, downloadDOCX, PatientReportData } from '../services/pdfExporter';
 
 // Pyodide types
@@ -78,11 +78,63 @@ interface SSVEPResult {
   };
 }
 
+// Multi-file comparison interfaces
+interface LoadedFile {
+  id: string;                    // Unique identifier
+  file: File;                    // Original file object
+  metadata: EDFMetadata;         // File metadata
+  nickname: string;              // User-friendly label (e.g., "Pre-Treatment", "Post-Treatment")
+  loadedAt: Date;               // Timestamp
+}
+
+interface ComparisonTrace {
+  id: string;                    // Unique identifier
+  fileId: string;               // Which file this trace comes from
+  label: string;                // Custom label for legend (e.g., "Baseline - O1")
+  channel: string;              // Channel name
+  timeFrame?: {                 // Optional time window
+    start: number;
+    end: number;
+  };
+  color?: string;               // Optional custom color
+}
+
+interface ComparisonPlot {
+  id: string;
+  name: string;                 // User-given name (e.g., "Pre vs Post Treatment")
+  traces: ComparisonTrace[];    // Array of traces to overlay
+  parameters: {                 // Common PSD parameters
+    method: 'welch' | 'periodogram';
+    fmin: number;
+    fmax: number;
+    nperseg_seconds: number;
+    noverlap_proportion: number;
+    window: string;
+  };
+  plotBase64?: string;          // Generated plot
+  createdAt: Date;
+}
+
 export default function PyodideEDFProcessor() {
   const [pyodideReady, setPyodideReady] = useState(false);
   const [pyodideLoading, setPyodideLoading] = useState(false);
-  const [currentFile, setCurrentFile] = useState<File | null>(null);
-  const [metadata, setMetadata] = useState<EDFMetadata | null>(null);
+
+  // Multi-file management state (defined early for use in computed properties)
+  const [loadedFiles, setLoadedFiles] = useState<LoadedFile[]>([]);
+  const [activeFileId, setActiveFileId] = useState<string | null>(null);
+
+  // Backward compatibility: currentFile and metadata are computed from loadedFiles
+  // This allows all existing code to work unchanged
+  const currentFile = useMemo(() =>
+    loadedFiles.find(f => f.id === activeFileId)?.file || null,
+    [loadedFiles, activeFileId]
+  );
+
+  const metadata = useMemo(() =>
+    loadedFiles.find(f => f.id === activeFileId)?.metadata || null,
+    [loadedFiles, activeFileId]
+  );
+
   const [analysisResults, setAnalysisResults] = useState<AnalysisResult[]>([]);
   const [ssvepResult, setSSVEPResult] = useState<SSVEPResult | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -110,6 +162,11 @@ export default function PyodideEDFProcessor() {
 
   // Resutil styling toggle
   const [useResutilStyle, setUseResutilStyle] = useState(false);
+
+  // Comparison mode state
+  const [comparisonMode, setComparisonMode] = useState<boolean>(false);
+  const [comparisonTraces, setComparisonTraces] = useState<ComparisonTrace[]>([]);
+  const [comparisonPlots, setComparisonPlots] = useState<ComparisonPlot[]>([]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pyodideRef = useRef<any>(null);
@@ -2596,15 +2653,16 @@ export_modified_edf()
     return progressInterval;
   }, []);
 
-  const handleFileSelect = useCallback(async (file: File) => {
+  // Helper function to add a file to the loaded files array
+  const addFile = useCallback(async (file: File): Promise<boolean> => {
     if (!pyodideReady || !pyodideRef.current) {
       setError('Python environment not ready. Please wait for initialization.');
-      return;
+      return false;
     }
 
     if (!file.name.toLowerCase().endsWith('.edf') && !file.name.toLowerCase().endsWith('.fif') && !file.name.toLowerCase().endsWith('.bdf')) {
       setError('Please select an EDF or BDF file');
-      return;
+      return false;
     }
 
     clearMessages();
@@ -2614,60 +2672,103 @@ export_modified_edf()
       // Read file as bytes
       const arrayBuffer = await file.arrayBuffer();
       const uint8Array = new Uint8Array(arrayBuffer);
-      
+
       // Set file data in Python globals using proper Pyodide method
       pyodideRef.current.globals.set('js_uint8_array', uint8Array);
       pyodideRef.current.globals.set('filename', file.name);
-      
+
       // Convert JavaScript Uint8Array to Python bytes
       const result = await pyodideRef.current.runPython(`
         # Convert JavaScript Uint8Array to Python bytes
         file_bytes = bytes(js_uint8_array)
-        
+
         print(f"Converted to Python bytes: {len(file_bytes)} bytes, type: {type(file_bytes)}")
-        
+
         read_edf_file(file_bytes, filename)
       `);
-      
+
       const parsedResult = JSON.parse(result);
-      
+
       if (parsedResult.error) {
         setError(`Failed to read EDF file: ${parsedResult.error}`);
-        return;
+        return false;
       }
-      
-      setCurrentFile(file);
-      setMetadata(parsedResult);
+
+      // Create unique ID for this file
+      const fileId = `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+      // Create LoadedFile object
+      const loadedFile: LoadedFile = {
+        id: fileId,
+        file: file,
+        metadata: parsedResult,
+        nickname: file.name.replace(/\.(edf|bdf|fif)$/i, ''),
+        loadedAt: new Date()
+      };
+
+      // Add to loaded files and set as active
+      setLoadedFiles(prev => [...prev, loadedFile]);
+      setActiveFileId(fileId);
+
       setSuccess(`File loaded: ${parsedResult.filename} (${parsedResult.num_channels} channels, ${parsedResult.duration_seconds?.toFixed(1)}s)`);
-      
+
       // Set all channels as selected by default
       if (parsedResult.channel_names && parsedResult.channel_names.length > 0) {
         setSelectedChannels(parsedResult.channel_names);
       }
-      
+
       // Initialize time frame to full duration
       if (parsedResult.duration_seconds) {
         setTimeFrameEnd(parsedResult.duration_seconds);
       }
-      
+
       // Initialize annotations if available
       if (parsedResult.annotations && parsedResult.annotations.length > 0) {
         setAnnotations(parsedResult.annotations);
       } else {
         setAnnotations([]);
       }
-      
-      // Clear previous results
-      setAnalysisResults([]);
-      setSSVEPResult(null);
-      
+
+      // Clear previous results when loading first file
+      if (loadedFiles.length === 0) {
+        setAnalysisResults([]);
+        setSSVEPResult(null);
+      }
+
+      return true;
+
     } catch (error) {
       console.error('File processing error:', error);
       setError(`File processing failed: ${error}`);
+      return false;
     } finally {
       setLoadingMessage('');
     }
-  }, [pyodideReady]);
+  }, [pyodideReady, loadedFiles]);
+
+  const handleFileSelect = useCallback(async (file: File) => {
+    // Check if this is the first file or an additional file
+    if (loadedFiles.length === 0) {
+      // First file - load normally
+      await addFile(file);
+    } else {
+      // Additional file - ask for confirmation
+      const shouldAdd = window.confirm(
+        `You already have ${loadedFiles.length} file(s) loaded. Would you like to add "${file.name}" for comparison?\n\nClick OK to add, or Cancel to replace existing files.`
+      );
+
+      if (shouldAdd) {
+        await addFile(file);
+      } else {
+        // Replace all files with this new one
+        setLoadedFiles([]);
+        setActiveFileId(null);
+        setAnalysisResults([]);
+        setSSVEPResult(null);
+        await addFile(file);
+      }
+    }
+  }, [pyodideReady, loadedFiles, addFile]);
 
   const handleFileInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -2675,6 +2776,65 @@ export_modified_edf()
       handleFileSelect(file);
     }
   };
+
+  // Helper function to switch active file
+  const switchToFile = useCallback((fileId: string) => {
+    const targetFile = loadedFiles.find(f => f.id === fileId);
+    if (!targetFile) return;
+
+    setActiveFileId(fileId);
+
+    // Update UI state for the new file
+    if (targetFile.metadata.channel_names && targetFile.metadata.channel_names.length > 0) {
+      setSelectedChannels(targetFile.metadata.channel_names);
+    }
+
+    if (targetFile.metadata.duration_seconds) {
+      setTimeFrameEnd(targetFile.metadata.duration_seconds);
+      setTimeFrameStart(0);
+    }
+
+    if (targetFile.metadata.annotations && targetFile.metadata.annotations.length > 0) {
+      setAnnotations(targetFile.metadata.annotations);
+    } else {
+      setAnnotations([]);
+    }
+
+    setSuccess(`Switched to file: ${targetFile.metadata.filename}`);
+  }, [loadedFiles]);
+
+  // Helper function to remove a file
+  const removeFile = useCallback((fileId: string) => {
+    const fileToRemove = loadedFiles.find(f => f.id === fileId);
+    if (!fileToRemove) return;
+
+    const confirmed = window.confirm(`Remove "${fileToRemove.nickname}"?`);
+    if (!confirmed) return;
+
+    const newLoadedFiles = loadedFiles.filter(f => f.id !== fileId);
+    setLoadedFiles(newLoadedFiles);
+
+    // If we removed the active file, switch to another or clear
+    if (activeFileId === fileId) {
+      if (newLoadedFiles.length > 0) {
+        switchToFile(newLoadedFiles[0].id);
+      } else {
+        setActiveFileId(null);
+        setAnalysisResults([]);
+        setSSVEPResult(null);
+        setAnnotations([]);
+      }
+    }
+
+    setSuccess(`Removed file: ${fileToRemove.nickname}`);
+  }, [loadedFiles, activeFileId, switchToFile]);
+
+  // Helper function to update file nickname
+  const updateFileNickname = useCallback((fileId: string, newNickname: string) => {
+    setLoadedFiles(prev => prev.map(f =>
+      f.id === fileId ? { ...f, nickname: newNickname } : f
+    ));
+  }, []);
 
   const runSSVEPAnalysis = async () => {
     if (!pyodideReady || !currentFile) {
@@ -3363,28 +3523,85 @@ export_modified_edf()
             </>
           ) : (
             <>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-3">
-                  <div className="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center">
-                    <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
+              <h2 className="text-lg font-semibold mb-3">Loaded Files ({loadedFiles.length})</h2>
+
+              {/* File list */}
+              <div className="space-y-2 mb-4">
+                {loadedFiles.map((loadedFile) => (
+                  <div
+                    key={loadedFile.id}
+                    className={`border rounded-lg p-3 transition-all ${
+                      loadedFile.id === activeFileId
+                        ? 'border-blue-500 bg-blue-50'
+                        : 'border-gray-200 hover:border-gray-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-3 flex-1">
+                        {/* Active indicator */}
+                        {loadedFile.id === activeFileId ? (
+                          <div className="w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center flex-shrink-0">
+                            <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                            </svg>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => switchToFile(loadedFile.id)}
+                            className="w-6 h-6 border-2 border-gray-300 rounded-full hover:border-blue-500 transition-colors flex-shrink-0"
+                            title="Switch to this file"
+                          />
+                        )}
+
+                        {/* File info */}
+                        <div className="flex-1 min-w-0">
+                          <input
+                            type="text"
+                            value={loadedFile.nickname}
+                            onChange={(e) => updateFileNickname(loadedFile.id, e.target.value)}
+                            className="font-medium text-sm text-gray-900 bg-transparent border-none focus:outline-none focus:ring-1 focus:ring-blue-500 rounded px-1 w-full"
+                            placeholder="File nickname"
+                          />
+                          <p className="text-xs text-gray-500 truncate">
+                            {loadedFile.metadata.filename} • {loadedFile.metadata.num_channels} channels • {loadedFile.metadata.duration_seconds?.toFixed(1)}s
+                          </p>
+                        </div>
+
+                        {/* Actions */}
+                        <div className="flex items-center space-x-2">
+                          {loadedFile.id !== activeFileId && (
+                            <button
+                              onClick={() => switchToFile(loadedFile.id)}
+                              className="text-xs bg-blue-100 hover:bg-blue-200 text-blue-700 px-2 py-1 rounded transition-colors"
+                            >
+                              Switch
+                            </button>
+                          )}
+                          <button
+                            onClick={() => removeFile(loadedFile.id)}
+                            className="text-xs bg-red-100 hover:bg-red-200 text-red-700 px-2 py-1 rounded transition-colors"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="text-sm font-medium text-gray-900">File Loaded: {currentFile.name}</h3>
-                    <p className="text-xs text-gray-500">Ready for analysis</p>
-                  </div>
-                </div>
-                
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={!pyodideReady}
-                  className="bg-gray-600 hover:bg-gray-700 text-white text-sm py-1 px-3 rounded disabled:opacity-50 transition-colors"
-                >
-                  Change File
-                </button>
+                ))}
               </div>
-              
+
+              {/* Add another file button */}
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={!pyodideReady}
+                className="w-full bg-green-600 hover:bg-green-700 text-white text-sm font-medium py-2 px-4 rounded disabled:opacity-50 transition-colors flex items-center justify-center space-x-2"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                <span>Add Another File</span>
+              </button>
+
               <input
                 type="file"
                 ref={fileInputRef}
