@@ -343,6 +343,21 @@ export default function PyodideEDFProcessor() {
         setLoadingMessage('FOOOF analysis module not available');
       }
 
+      // Load comparison PSD module from external file
+      try {
+        setLoadingMessage('Loading comparison PSD module...');
+        const comparisonResponse = await fetch('/comparison_psd.py');
+        if (!comparisonResponse.ok) {
+          throw new Error(`Failed to load comparison_psd.py: ${comparisonResponse.statusText}`);
+        }
+        const comparisonCode = await comparisonResponse.text();
+        await pyodide.runPython(comparisonCode);
+        console.log('Comparison PSD module loaded successfully');
+      } catch (error) {
+        console.warn('Failed to load comparison PSD module:', error);
+        setLoadingMessage('Comparison PSD module not available');
+      }
+
       // Install resutil for custom Optoceutics plot styling
       // Multi-stage fallback approach to handle dependency issues
       let resutilInstalled = false;
@@ -3008,6 +3023,115 @@ export_modified_edf()
     setSuccess(`Deleted comparison plot: ${plot.name}`);
   }, [comparisonPlots]);
 
+  // Generate comparison PSD plot
+  const generateComparisonPlot = useCallback(async () => {
+    if (!pyodideReady || !pyodideRef.current) {
+      setError('Python environment not ready');
+      return;
+    }
+
+    if (comparisonTraces.length < 2) {
+      setError('Please add at least 2 traces for comparison');
+      return;
+    }
+
+    setIsAnalyzing(true);
+    clearMessages();
+    setLoadingMessage('Generating comparison PSD plot...');
+
+    try {
+      // Prepare traces configuration
+      const tracesConfig = [];
+
+      for (const trace of comparisonTraces) {
+        // Find the file
+        const loadedFile = loadedFiles.find(f => f.id === trace.fileId);
+        if (!loadedFile) {
+          console.warn(`File not found for trace: ${trace.label}`);
+          continue;
+        }
+
+        // Read file as bytes
+        const arrayBuffer = await loadedFile.file.arrayBuffer();
+        const uint8Array = new Uint8Array(arrayBuffer);
+
+        // Create trace configuration
+        const traceConfig: any = {
+          file_bytes: uint8Array,
+          filename: loadedFile.file.name,
+          channel: trace.channel,
+          label: trace.label
+        };
+
+        // Add time window if specified
+        if (trace.timeFrame) {
+          traceConfig.time_start = trace.timeFrame.start;
+          traceConfig.time_end = trace.timeFrame.end;
+        }
+
+        // Add color if specified
+        if (trace.color) {
+          traceConfig.color = trace.color;
+        }
+
+        tracesConfig.push(traceConfig);
+      }
+
+      if (tracesConfig.length < 2) {
+        setError('Could not load data for enough traces (minimum 2 required)');
+        setIsAnalyzing(false);
+        setLoadingMessage('');
+        return;
+      }
+
+      // Set traces config in Python globals
+      pyodideRef.current.globals.set('comparison_traces_config', tracesConfig);
+      pyodideRef.current.globals.set('comparison_psd_params', comparisonPsdParams);
+      pyodideRef.current.globals.set('use_resutil_style', useResutilStyle);
+
+      // Call Python function
+      const result = await pyodideRef.current.runPythonAsync(`
+import json
+
+# Call the comparison PSD function
+result_json = generate_comparison_psd(
+    comparison_traces_config,
+    comparison_psd_params,
+    use_resutil_style
+)
+
+result_json
+      `);
+
+      const parsedResult = JSON.parse(result);
+
+      if (parsedResult.success) {
+        setCurrentComparisonPlot(parsedResult.plot_base64);
+        setSuccess(`Successfully generated comparison plot with ${comparisonTraces.length} traces`);
+        console.log('Comparison plot generated successfully');
+      } else {
+        setError(`Failed to generate comparison plot: ${parsedResult.error}`);
+        console.error('Comparison plot error:', parsedResult.error);
+        if (parsedResult.traceback) {
+          console.error('Python traceback:', parsedResult.traceback);
+        }
+      }
+
+    } catch (error) {
+      console.error('Error generating comparison plot:', error);
+      setError(`Failed to generate comparison plot: ${error}`);
+    } finally {
+      setIsAnalyzing(false);
+      setLoadingMessage('');
+    }
+  }, [
+    pyodideReady,
+    comparisonTraces,
+    loadedFiles,
+    comparisonPsdParams,
+    useResutilStyle
+  ]);
+
   const runSSVEPAnalysis = async () => {
     if (!pyodideReady || !currentFile) {
       setError('File not loaded or Python environment not ready');
@@ -4276,14 +4400,11 @@ export_modified_edf()
                 {comparisonTraces.length >= 2 && (
                   <div className="text-center">
                     <button
-                      onClick={() => {
-                        // This will be implemented in Phase 3
-                        setError('Comparison plot generation will be implemented in Phase 3 (Python integration)');
-                      }}
+                      onClick={generateComparisonPlot}
                       disabled={isAnalyzing}
                       className="px-6 py-3 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white font-semibold rounded-lg shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all"
                     >
-                      Generate Comparison Plot ({comparisonTraces.length} traces)
+                      {isAnalyzing ? 'Generating...' : `Generate Comparison Plot (${comparisonTraces.length} traces)`}
                     </button>
                     <p className="text-xs text-gray-600 mt-2">
                       Minimum 2 traces required for comparison
