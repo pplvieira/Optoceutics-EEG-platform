@@ -47,6 +47,15 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False):
         default_colors = ['#3B82F6', '#EF4444', '#10B981', '#F59E0B', '#8B5CF6',
                          '#EC4899', '#14B8A6', '#F97316', '#6366F1', '#84CC16']
 
+        # Import MNE if available
+        try:
+            import mne
+            mne.set_log_level('WARNING')  # Reduce MNE verbosity
+            MNE_AVAILABLE = True
+        except ImportError:
+            MNE_AVAILABLE = False
+            print("Warning: MNE not available, falling back to pyedflib")
+
         # Process each trace
         for idx, trace in enumerate(traces_config):
             try:
@@ -57,26 +66,20 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False):
 
                 print(f"Processing trace: {label} (file: {filename}, channel: {channel})")
 
-                # Write bytes to temporary file (same as existing code)
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.edf') as tmp_file:
+                # Determine file extension from filename
+                file_ext = os.path.splitext(filename)[1]
+                if not file_ext:
+                    file_ext = '.edf'  # Default to EDF
+
+                # Write bytes to temporary file with correct extension
+                with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_file:
                     tmp_file.write(file_bytes)
                     tmp_path = tmp_file.name
 
                 try:
-                    # Try to load with MNE (same as existing code)
-                    try:
-                        import mne
-                        MNE_AVAILABLE = True
-                    except ImportError:
-                        MNE_AVAILABLE = False
-
                     if MNE_AVAILABLE:
-                        try:
-                            # Try EDF first
-                            raw = mne.io.read_raw_edf(tmp_path, preload=True, verbose=False)
-                        except:
-                            # Try FIF if EDF fails
-                            raw = mne.io.read_raw_fif(tmp_path, preload=True, verbose=False)
+                        # Use MNE's auto-detection for file format
+                        raw = mne.io.read_raw(tmp_path, preload=True, verbose=False)
 
                         # Check if channel exists
                         if channel not in raw.ch_names:
@@ -89,7 +92,7 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False):
                         sfreq = raw_copy.info['sfreq']
 
                     else:
-                        # Fallback to pyedflib (same as existing code)
+                        # Fallback to pyedflib for EDF files only
                         import pyedflib
                         f = pyedflib.EdfReader(tmp_path)
 
