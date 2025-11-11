@@ -21,12 +21,21 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False):
     """
     try:
         # Apply resutil styling if requested
+        resutil_colors = None
         if use_resutil_style:
             try:
                 from resutil import plotlib
                 plotlib.set_oc_style()
                 plotlib.set_oc_font()
                 print("Applied Optoceutics custom styling (resutil.plotlib)")
+
+                # Extract color cycle from matplotlib after applying resutil style
+                import matplotlib as mpl
+                prop_cycle = mpl.rcParams['axes.prop_cycle']
+                resutil_colors = [c['color'] for c in prop_cycle]
+                # Ensure colors have '#' prefix
+                resutil_colors = ['#' + c if not c.startswith('#') else c for c in resutil_colors]
+                print(f"Using resutil color palette: {resutil_colors}")
             except ImportError:
                 print("Resutil not available, using default matplotlib styling")
             except Exception as e:
@@ -43,9 +52,12 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False):
         # Create figure
         fig, ax = plt.subplots(figsize=(12, 6))
 
-        # Color palette if colors not specified
-        default_colors = ['#3B82F6', '#EF4444', '#10B981', '#F59E0B', '#8B5CF6',
-                         '#EC4899', '#14B8A6', '#F97316', '#6366F1', '#84CC16']
+        # Color palette - use resutil colors if available, otherwise default
+        if resutil_colors:
+            default_colors = resutil_colors
+        else:
+            default_colors = ['#3B82F6', '#EF4444', '#10B981', '#F59E0B', '#8B5CF6',
+                             '#EC4899', '#14B8A6', '#F97316', '#6366F1', '#84CC16']
 
         # Import MNE if available
         try:
@@ -152,11 +164,17 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False):
                 freqs_filtered = freqs[freq_mask]
                 psd_filtered = psd[freq_mask]
 
-                # Get color
+                # Get color - use custom color if specified, otherwise use palette
                 color = trace.get('color', default_colors[idx % len(default_colors)])
 
-                # Plot with log scale (same as existing PSD tool)
-                ax.semilogy(freqs_filtered, psd_filtered, label=label, color=color, linewidth=2, alpha=0.8)
+                # Plot with log scale
+                # When resutil styling is enabled, let it control linewidth
+                if use_resutil_style:
+                    # Use style defaults for linewidth, let resutil control it
+                    ax.semilogy(freqs_filtered, psd_filtered, label=label, color=color)
+                else:
+                    # Use explicit styling for non-resutil mode
+                    ax.semilogy(freqs_filtered, psd_filtered, label=label, color=color, linewidth=2, alpha=0.8)
 
                 print(f"✓ Plotted trace: {label}")
 
@@ -166,12 +184,21 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False):
                 traceback.print_exc()
                 continue
 
-        # Configure plot (same as existing PSD tool)
-        ax.set_xlabel('Frequency (Hz)', fontsize=12, fontweight='bold')
-        ax.set_ylabel('Power Spectral Density (V²/Hz)', fontsize=12, fontweight='bold')
-        ax.set_title('PSD Comparison', fontsize=14, fontweight='bold')
-        ax.grid(True, alpha=0.3)
-        ax.legend(loc='best', fontsize=10, framealpha=0.9)
+        # Configure plot
+        # When resutil styling is enabled, let it control font settings
+        if use_resutil_style:
+            ax.set_xlabel('Frequency (Hz)')
+            ax.set_ylabel('Power Spectral Density (V²/Hz)')
+            ax.set_title('PSD Comparison')
+            # Grid is already set by resutil style
+            ax.legend(loc='best')
+        else:
+            ax.set_xlabel('Frequency (Hz)', fontsize=12, fontweight='bold')
+            ax.set_ylabel('Power Spectral Density (V²/Hz)', fontsize=12, fontweight='bold')
+            ax.set_title('PSD Comparison', fontsize=14, fontweight='bold')
+            ax.grid(True, alpha=0.3)
+            ax.legend(loc='best', fontsize=10, framealpha=0.9)
+
         ax.set_xlim(fmin, fmax)
 
         # Tight layout
