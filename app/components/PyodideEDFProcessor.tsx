@@ -2,7 +2,7 @@
 
 /* eslint-disable @next/next/no-img-element */
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { generatePatientReportPDF, generatePatientReportDOCX, downloadPDF, downloadDOCX, PatientReportData } from '../services/pdfExporter';
 
 // Pyodide types
@@ -78,11 +78,63 @@ interface SSVEPResult {
   };
 }
 
+// Multi-file comparison interfaces
+interface LoadedFile {
+  id: string;                    // Unique identifier
+  file: File;                    // Original file object
+  metadata: EDFMetadata;         // File metadata
+  nickname: string;              // User-friendly label (e.g., "Pre-Treatment", "Post-Treatment")
+  loadedAt: Date;               // Timestamp
+}
+
+interface ComparisonTrace {
+  id: string;                    // Unique identifier
+  fileId: string;               // Which file this trace comes from
+  label: string;                // Custom label for legend (e.g., "Baseline - O1")
+  channel: string;              // Channel name
+  timeFrame?: {                 // Optional time window
+    start: number;
+    end: number;
+  };
+  color?: string;               // Optional custom color
+}
+
+interface ComparisonPlot {
+  id: string;
+  name: string;                 // User-given name (e.g., "Pre vs Post Treatment")
+  traces: ComparisonTrace[];    // Array of traces to overlay
+  parameters: {                 // Common PSD parameters
+    method: 'welch' | 'periodogram';
+    fmin: number;
+    fmax: number;
+    nperseg_seconds: number;
+    noverlap_proportion: number;
+    window: string;
+  };
+  plotBase64?: string;          // Generated plot
+  createdAt: Date;
+}
+
 export default function PyodideEDFProcessor() {
   const [pyodideReady, setPyodideReady] = useState(false);
   const [pyodideLoading, setPyodideLoading] = useState(false);
-  const [currentFile, setCurrentFile] = useState<File | null>(null);
-  const [metadata, setMetadata] = useState<EDFMetadata | null>(null);
+
+  // Multi-file management state (defined early for use in computed properties)
+  const [loadedFiles, setLoadedFiles] = useState<LoadedFile[]>([]);
+  const [activeFileId, setActiveFileId] = useState<string | null>(null);
+
+  // Backward compatibility: currentFile and metadata are computed from loadedFiles
+  // This allows all existing code to work unchanged
+  const currentFile = useMemo(() =>
+    loadedFiles.find(f => f.id === activeFileId)?.file || null,
+    [loadedFiles, activeFileId]
+  );
+
+  const metadata = useMemo(() =>
+    loadedFiles.find(f => f.id === activeFileId)?.metadata || null,
+    [loadedFiles, activeFileId]
+  );
+
   const [analysisResults, setAnalysisResults] = useState<AnalysisResult[]>([]);
   const [ssvepResult, setSSVEPResult] = useState<SSVEPResult | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -110,6 +162,35 @@ export default function PyodideEDFProcessor() {
 
   // Resutil styling toggle
   const [useResutilStyle, setUseResutilStyle] = useState(false);
+
+  // Comparison mode state
+  const [comparisonMode, setComparisonMode] = useState<boolean>(false);
+  const [comparisonTraces, setComparisonTraces] = useState<ComparisonTrace[]>([]);
+  const [comparisonPlots, setComparisonPlots] = useState<ComparisonPlot[]>([]);
+
+  // Trace builder form state
+  const [traceBuilderFileId, setTraceBuilderFileId] = useState<string>('');
+  const [traceBuilderChannel, setTraceBuilderChannel] = useState<string>('');
+  const [traceBuilderUseTimeFrame, setTraceBuilderUseTimeFrame] = useState<boolean>(false);
+  const [traceBuilderTimeStart, setTraceBuilderTimeStart] = useState<number>(0);
+  const [traceBuilderTimeEnd, setTraceBuilderTimeEnd] = useState<number>(0);
+  const [traceBuilderLabel, setTraceBuilderLabel] = useState<string>('');
+  const [traceBuilderColor, setTraceBuilderColor] = useState<string>('');
+  const [editingTraceId, setEditingTraceId] = useState<string | null>(null);
+
+  // Comparison PSD parameters
+  const [comparisonPsdParams, setComparisonPsdParams] = useState({
+    method: 'welch' as 'welch' | 'periodogram',
+    fmin: 0.5,
+    fmax: 50,
+    nperseg_seconds: 4,
+    noverlap_proportion: 0.5,
+    window: 'hamming'
+  });
+
+  // Current comparison plot and name
+  const [currentComparisonPlot, setCurrentComparisonPlot] = useState<string>('');
+  const [comparisonPlotName, setComparisonPlotName] = useState<string>('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pyodideRef = useRef<any>(null);
@@ -262,39 +343,148 @@ export default function PyodideEDFProcessor() {
         setLoadingMessage('FOOOF analysis module not available');
       }
 
-      // Install resutil for custom Optoceutics plot styling
-      // Use custom lightweight module to avoid dependency issues
+      // Load comparison PSD module from external file
       try {
-        setLoadingMessage('Loading Optoceutics styling library...');
-
-        // Fetch our custom resutil module
-        const resutilResponse = await fetch('/python-packages/resutil_oc.py');
-        if (!resutilResponse.ok) {
-          throw new Error(`Failed to fetch resutil_oc.py: ${resutilResponse.status}`);
+        setLoadingMessage('Loading comparison PSD module...');
+        const comparisonResponse = await fetch('/comparison_psd.py');
+        if (!comparisonResponse.ok) {
+          throw new Error(`Failed to load comparison_psd.py: ${comparisonResponse.statusText}`);
         }
-        const resutilCode = await resutilResponse.text();
+        const comparisonCode = await comparisonResponse.text();
+        await pyodide.runPython(comparisonCode);
+        console.log('Comparison PSD module loaded successfully');
+      } catch (error) {
+        console.warn('Failed to load comparison PSD module:', error);
+        setLoadingMessage('Comparison PSD module not available');
+      }
 
-        // Load it into Python as 'resutil' module
-        await pyodide.runPythonAsync(`
+      // Install resutil for custom Optoceutics plot styling
+      // Multi-stage fallback approach to handle dependency issues
+      let resutilInstalled = false;
+
+      try {
+        setLoadingMessage('Installing resutil (Optoceutics styling library)...');
+        const micropip = pyodide.pyimport("micropip");
+
+        // Install markdown dependency (required by resutil core)
+        await micropip.install(['markdown']);
+        console.log('Markdown library installed');
+
+        // Stage 1: Try installing with keep_going=True (ignores missing optional dependencies)
+        try {
+          setLoadingMessage('Installing resutil from local wheel (Stage 1)...');
+          await pyodide.runPythonAsync(`
+import micropip
+await micropip.install('/pyodide-packages/resutil-0.4.0-py3-none-any.whl', keep_going=True)
+`);
+
+          // Verify it works
+          await pyodide.runPythonAsync(`
+import resutil
+from resutil import plotlib
+print("✓ Resutil (v0.4.0) loaded successfully with plotlib module (Stage 1)")
+`);
+          resutilInstalled = true;
+          console.log('Resutil installed successfully (Stage 1: keep_going=True)');
+        } catch (stage1Error) {
+          console.warn('Stage 1 failed, trying Stage 2 (manual extraction)...', stage1Error);
+
+          // Stage 2: Manual wheel extraction (bypass micropip completely)
+          try {
+            setLoadingMessage('Installing resutil via manual extraction (Stage 2)...');
+
+            // Fetch the wheel file
+            const wheelResponse = await fetch('/pyodide-packages/resutil-0.4.0-py3-none-any.whl');
+            if (!wheelResponse.ok) {
+              throw new Error(`Failed to fetch wheel: ${wheelResponse.status}`);
+            }
+            const wheelBytes = await wheelResponse.arrayBuffer();
+
+            // Write to Pyodide filesystem
+            pyodide.FS.writeFile('/tmp/resutil.whl', new Uint8Array(wheelBytes));
+
+            // Extract and install manually
+            await pyodide.runPythonAsync(`
+import sys
+import zipfile
+import os
+
+# Extract wheel to temporary directory
+wheel_path = '/tmp/resutil.whl'
+extract_path = '/tmp/resutil_pkg'
+
+# Create extraction directory
+if os.path.exists(extract_path):
+    import shutil
+    shutil.rmtree(extract_path)
+os.makedirs(extract_path)
+
+# Unzip the wheel
+with zipfile.ZipFile(wheel_path, 'r') as zip_ref:
+    zip_ref.extractall(extract_path)
+
+# Add to sys.path (highest priority)
+if extract_path not in sys.path:
+    sys.path.insert(0, extract_path)
+
+# Verify resutil is importable
+import resutil
+from resutil import plotlib
+print(f"✓ Resutil (v0.4.0) loaded successfully with plotlib module (Stage 2: manual extraction)")
+print(f"  Loaded from: {resutil.__file__}")
+`);
+            resutilInstalled = true;
+            console.log('Resutil installed successfully (Stage 2: manual extraction)');
+          } catch (stage2Error) {
+            console.warn('Stage 2 failed, trying Stage 3 (lightweight module)...', stage2Error);
+
+            // Stage 3: Use lightweight custom module as ultimate fallback
+            try {
+              setLoadingMessage('Loading lightweight styling module (Stage 3)...');
+
+              const resutilResponse = await fetch('/python-packages/resutil_oc.py');
+              if (!resutilResponse.ok) {
+                throw new Error(`Failed to fetch resutil_oc.py: ${resutilResponse.status}`);
+              }
+              const resutilCode = await resutilResponse.text();
+
+              await pyodide.runPythonAsync(`
 import sys
 from types import ModuleType
 
 # Create resutil module
 resutil = ModuleType('resutil')
 
-# Execute the code in the module's namespace
-exec('''${resutilCode.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}''', resutil.__dict__)
+# Create plotlib submodule
+plotlib = ModuleType('plotlib')
 
-# Add to sys.modules so it can be imported
+# Execute the lightweight code in plotlib's namespace
+exec('''${resutilCode.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}''', plotlib.__dict__)
+
+# Add plotlib to resutil
+resutil.plotlib = plotlib
+
+# Add to sys.modules
 sys.modules['resutil'] = resutil
+sys.modules['resutil.plotlib'] = plotlib
 
-print("✓ Optoceutics styling library (resutil) loaded successfully")
+print("✓ Resutil loaded successfully with lightweight plotlib module (Stage 3: fallback)")
 `);
+              resutilInstalled = true;
+              console.log('Resutil installed successfully (Stage 3: lightweight fallback)');
+            } catch (stage3Error) {
+              console.error('All stages failed:', stage3Error);
+              throw stage3Error;
+            }
+          }
+        }
 
-        setLoadingMessage('Optoceutics styling library loaded');
-        console.log('Custom resutil module loaded successfully');
+        if (resutilInstalled) {
+          setLoadingMessage('Resutil library ready');
+          console.log('Resutil installation complete and verified');
+        }
       } catch (error) {
-        console.warn('Resutil loading failed (will use default matplotlib styling):', error);
+        console.warn('Resutil installation failed completely (will use default matplotlib styling):', error);
         setLoadingMessage('Using default matplotlib styling');
       }
 
@@ -1608,10 +1798,10 @@ def analyze_psd(edf_reader, parameters):
     # Apply resutil styling if requested
     if use_resutil_style:
         try:
-            import resutil
-            resutil.set_oc_style()
-            resutil.set_oc_font()
-            print("Applied Optoceutics custom styling to PSD plot (resutil)")
+            from resutil import plotlib
+            plotlib.set_oc_style()
+            plotlib.set_oc_font()
+            print("Applied Optoceutics custom styling to PSD plot (resutil.plotlib)")
         except ImportError:
             print("Resutil not available for PSD, using default matplotlib styling")
         except Exception as e:
@@ -2502,15 +2692,16 @@ export_modified_edf()
     return progressInterval;
   }, []);
 
-  const handleFileSelect = useCallback(async (file: File) => {
+  // Helper function to add a file to the loaded files array
+  const addFile = useCallback(async (file: File): Promise<boolean> => {
     if (!pyodideReady || !pyodideRef.current) {
       setError('Python environment not ready. Please wait for initialization.');
-      return;
+      return false;
     }
 
     if (!file.name.toLowerCase().endsWith('.edf') && !file.name.toLowerCase().endsWith('.fif') && !file.name.toLowerCase().endsWith('.bdf')) {
       setError('Please select an EDF or BDF file');
-      return;
+      return false;
     }
 
     clearMessages();
@@ -2520,60 +2711,103 @@ export_modified_edf()
       // Read file as bytes
       const arrayBuffer = await file.arrayBuffer();
       const uint8Array = new Uint8Array(arrayBuffer);
-      
+
       // Set file data in Python globals using proper Pyodide method
       pyodideRef.current.globals.set('js_uint8_array', uint8Array);
       pyodideRef.current.globals.set('filename', file.name);
-      
+
       // Convert JavaScript Uint8Array to Python bytes
       const result = await pyodideRef.current.runPython(`
         # Convert JavaScript Uint8Array to Python bytes
         file_bytes = bytes(js_uint8_array)
-        
+
         print(f"Converted to Python bytes: {len(file_bytes)} bytes, type: {type(file_bytes)}")
-        
+
         read_edf_file(file_bytes, filename)
       `);
-      
+
       const parsedResult = JSON.parse(result);
-      
+
       if (parsedResult.error) {
         setError(`Failed to read EDF file: ${parsedResult.error}`);
-        return;
+        return false;
       }
-      
-      setCurrentFile(file);
-      setMetadata(parsedResult);
+
+      // Create unique ID for this file
+      const fileId = `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+      // Create LoadedFile object
+      const loadedFile: LoadedFile = {
+        id: fileId,
+        file: file,
+        metadata: parsedResult,
+        nickname: file.name.replace(/\.(edf|bdf|fif)$/i, ''),
+        loadedAt: new Date()
+      };
+
+      // Add to loaded files and set as active
+      setLoadedFiles(prev => [...prev, loadedFile]);
+      setActiveFileId(fileId);
+
       setSuccess(`File loaded: ${parsedResult.filename} (${parsedResult.num_channels} channels, ${parsedResult.duration_seconds?.toFixed(1)}s)`);
-      
+
       // Set all channels as selected by default
       if (parsedResult.channel_names && parsedResult.channel_names.length > 0) {
         setSelectedChannels(parsedResult.channel_names);
       }
-      
+
       // Initialize time frame to full duration
       if (parsedResult.duration_seconds) {
         setTimeFrameEnd(parsedResult.duration_seconds);
       }
-      
+
       // Initialize annotations if available
       if (parsedResult.annotations && parsedResult.annotations.length > 0) {
         setAnnotations(parsedResult.annotations);
       } else {
         setAnnotations([]);
       }
-      
-      // Clear previous results
-      setAnalysisResults([]);
-      setSSVEPResult(null);
-      
+
+      // Clear previous results when loading first file
+      if (loadedFiles.length === 0) {
+        setAnalysisResults([]);
+        setSSVEPResult(null);
+      }
+
+      return true;
+
     } catch (error) {
       console.error('File processing error:', error);
       setError(`File processing failed: ${error}`);
+      return false;
     } finally {
       setLoadingMessage('');
     }
-  }, [pyodideReady]);
+  }, [pyodideReady, loadedFiles]);
+
+  const handleFileSelect = useCallback(async (file: File) => {
+    // Check if this is the first file or an additional file
+    if (loadedFiles.length === 0) {
+      // First file - load normally
+      await addFile(file);
+    } else {
+      // Additional file - ask for confirmation
+      const shouldAdd = window.confirm(
+        `You already have ${loadedFiles.length} file(s) loaded. Would you like to add "${file.name}" for comparison?\n\nClick OK to add, or Cancel to replace existing files.`
+      );
+
+      if (shouldAdd) {
+        await addFile(file);
+      } else {
+        // Replace all files with this new one
+        setLoadedFiles([]);
+        setActiveFileId(null);
+        setAnalysisResults([]);
+        setSSVEPResult(null);
+        await addFile(file);
+      }
+    }
+  }, [pyodideReady, loadedFiles, addFile]);
 
   const handleFileInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -2581,6 +2815,383 @@ export_modified_edf()
       handleFileSelect(file);
     }
   };
+
+  // Helper function to switch active file
+  const switchToFile = useCallback((fileId: string) => {
+    const targetFile = loadedFiles.find(f => f.id === fileId);
+    if (!targetFile) return;
+
+    setActiveFileId(fileId);
+
+    // Update UI state for the new file
+    if (targetFile.metadata.channel_names && targetFile.metadata.channel_names.length > 0) {
+      setSelectedChannels(targetFile.metadata.channel_names);
+    }
+
+    if (targetFile.metadata.duration_seconds) {
+      setTimeFrameEnd(targetFile.metadata.duration_seconds);
+      setTimeFrameStart(0);
+    }
+
+    if (targetFile.metadata.annotations && targetFile.metadata.annotations.length > 0) {
+      setAnnotations(targetFile.metadata.annotations);
+    } else {
+      setAnnotations([]);
+    }
+
+    setSuccess(`Switched to file: ${targetFile.metadata.filename}`);
+  }, [loadedFiles]);
+
+  // Helper function to remove a file
+  const removeFile = useCallback((fileId: string) => {
+    const fileToRemove = loadedFiles.find(f => f.id === fileId);
+    if (!fileToRemove) return;
+
+    const confirmed = window.confirm(`Remove "${fileToRemove.nickname}"?`);
+    if (!confirmed) return;
+
+    const newLoadedFiles = loadedFiles.filter(f => f.id !== fileId);
+    setLoadedFiles(newLoadedFiles);
+
+    // If we removed the active file, switch to another or clear
+    if (activeFileId === fileId) {
+      if (newLoadedFiles.length > 0) {
+        switchToFile(newLoadedFiles[0].id);
+      } else {
+        setActiveFileId(null);
+        setAnalysisResults([]);
+        setSSVEPResult(null);
+        setAnnotations([]);
+      }
+    }
+
+    setSuccess(`Removed file: ${fileToRemove.nickname}`);
+  }, [loadedFiles, activeFileId, switchToFile]);
+
+  // Helper function to update file nickname
+  const updateFileNickname = useCallback((fileId: string, newNickname: string) => {
+    setLoadedFiles(prev => prev.map(f =>
+      f.id === fileId ? { ...f, nickname: newNickname } : f
+    ));
+  }, []);
+
+  // Trace builder helper functions
+  const resetTraceBuilder = useCallback(() => {
+    setTraceBuilderFileId('');
+    setTraceBuilderChannel('');
+    setTraceBuilderUseTimeFrame(false);
+    setTraceBuilderTimeStart(0);
+    setTraceBuilderTimeEnd(0);
+    setTraceBuilderLabel('');
+    setTraceBuilderColor('');
+    setEditingTraceId(null);
+  }, []);
+
+  const addOrUpdateTrace = useCallback(() => {
+    if (!traceBuilderFileId || !traceBuilderChannel) {
+      setError('Please select a file and channel for the trace');
+      return;
+    }
+
+    const selectedFile = loadedFiles.find(f => f.id === traceBuilderFileId);
+    if (!selectedFile) return;
+
+    // Generate smart default label if not provided
+    const defaultLabel = traceBuilderLabel ||
+      `${selectedFile.nickname} - ${traceBuilderChannel}${
+        traceBuilderUseTimeFrame ? ` (${traceBuilderTimeStart.toFixed(1)}-${traceBuilderTimeEnd.toFixed(1)}s)` : ''
+      }`;
+
+    const trace: ComparisonTrace = {
+      id: editingTraceId || `trace_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      fileId: traceBuilderFileId,
+      channel: traceBuilderChannel,
+      label: defaultLabel,
+      timeFrame: traceBuilderUseTimeFrame ? {
+        start: traceBuilderTimeStart,
+        end: traceBuilderTimeEnd
+      } : undefined,
+      color: traceBuilderColor || undefined
+    };
+
+    if (editingTraceId) {
+      // Update existing trace
+      setComparisonTraces(prev => prev.map(t => t.id === editingTraceId ? trace : t));
+      setSuccess(`Updated trace: ${defaultLabel}`);
+    } else {
+      // Add new trace
+      setComparisonTraces(prev => [...prev, trace]);
+      setSuccess(`Added trace: ${defaultLabel}`);
+    }
+
+    resetTraceBuilder();
+  }, [
+    traceBuilderFileId,
+    traceBuilderChannel,
+    traceBuilderUseTimeFrame,
+    traceBuilderTimeStart,
+    traceBuilderTimeEnd,
+    traceBuilderLabel,
+    traceBuilderColor,
+    editingTraceId,
+    loadedFiles,
+    resetTraceBuilder
+  ]);
+
+  const editTrace = useCallback((traceId: string) => {
+    const trace = comparisonTraces.find(t => t.id === traceId);
+    if (!trace) return;
+
+    setTraceBuilderFileId(trace.fileId);
+    setTraceBuilderChannel(trace.channel);
+    setTraceBuilderLabel(trace.label);
+    setTraceBuilderColor(trace.color || '');
+
+    if (trace.timeFrame) {
+      setTraceBuilderUseTimeFrame(true);
+      setTraceBuilderTimeStart(trace.timeFrame.start);
+      setTraceBuilderTimeEnd(trace.timeFrame.end);
+    } else {
+      setTraceBuilderUseTimeFrame(false);
+      setTraceBuilderTimeStart(0);
+      setTraceBuilderTimeEnd(0);
+    }
+
+    setEditingTraceId(traceId);
+  }, [comparisonTraces]);
+
+  const removeTrace = useCallback((traceId: string) => {
+    setComparisonTraces(prev => prev.filter(t => t.id !== traceId));
+    if (editingTraceId === traceId) {
+      resetTraceBuilder();
+    }
+  }, [editingTraceId, resetTraceBuilder]);
+
+  const moveTraceUp = useCallback((traceId: string) => {
+    setComparisonTraces(prev => {
+      const index = prev.findIndex(t => t.id === traceId);
+      if (index <= 0) return prev;
+      const newTraces = [...prev];
+      [newTraces[index - 1], newTraces[index]] = [newTraces[index], newTraces[index - 1]];
+      return newTraces;
+    });
+  }, []);
+
+  const moveTraceDown = useCallback((traceId: string) => {
+    setComparisonTraces(prev => {
+      const index = prev.findIndex(t => t.id === traceId);
+      if (index < 0 || index >= prev.length - 1) return prev;
+      const newTraces = [...prev];
+      [newTraces[index], newTraces[index + 1]] = [newTraces[index + 1], newTraces[index]];
+      return newTraces;
+    });
+  }, []);
+
+  const saveComparisonPlot = useCallback(() => {
+    if (!currentComparisonPlot || !comparisonPlotName.trim()) {
+      setError('Please provide a name for the comparison plot');
+      return;
+    }
+
+    const comparisonPlot: ComparisonPlot = {
+      id: `comparison_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      name: comparisonPlotName,
+      traces: [...comparisonTraces],
+      parameters: { ...comparisonPsdParams },
+      plotBase64: currentComparisonPlot,
+      createdAt: new Date()
+    };
+
+    setComparisonPlots(prev => [...prev, comparisonPlot]);
+    setSuccess(`Saved comparison plot: ${comparisonPlotName}`);
+
+    // Reset for next comparison
+    setComparisonPlotName('');
+    setCurrentComparisonPlot('');
+    setComparisonTraces([]);
+    setComparisonMode(false);
+  }, [currentComparisonPlot, comparisonPlotName, comparisonTraces, comparisonPsdParams]);
+
+  const deleteComparisonPlot = useCallback((plotId: string) => {
+    const plot = comparisonPlots.find(p => p.id === plotId);
+    if (!plot) return;
+
+    const confirmed = window.confirm(`Delete comparison plot "${plot.name}"?`);
+    if (!confirmed) return;
+
+    setComparisonPlots(prev => prev.filter(p => p.id !== plotId));
+    setSuccess(`Deleted comparison plot: ${plot.name}`);
+  }, [comparisonPlots]);
+
+  // Generate comparison PSD plot
+  const generateComparisonPlot = useCallback(async () => {
+    if (!pyodideReady || !pyodideRef.current) {
+      setError('Python environment not ready');
+      return;
+    }
+
+    if (comparisonTraces.length < 2) {
+      setError('Please add at least 2 traces for comparison');
+      return;
+    }
+
+    setIsAnalyzing(true);
+    clearMessages();
+    setLoadingMessage('Generating comparison PSD plot...');
+
+    try {
+      // Prepare traces - we need to set file bytes separately for each trace
+      // because Pyodide doesn't handle nested Uint8Arrays well
+      const traceMetadata = [];
+
+      for (let idx = 0; idx < comparisonTraces.length; idx++) {
+        const trace = comparisonTraces[idx];
+
+        // Find the file
+        const loadedFile = loadedFiles.find(f => f.id === trace.fileId);
+        if (!loadedFile) {
+          console.warn(`File not found for trace: ${trace.label}`);
+          continue;
+        }
+
+        // Read file as bytes
+        const arrayBuffer = await loadedFile.file.arrayBuffer();
+        const uint8Array = new Uint8Array(arrayBuffer);
+
+        // Set this file's bytes in Python globals with unique name
+        pyodideRef.current.globals.set(`file_bytes_${idx}`, uint8Array);
+
+        // Create trace metadata (without the binary data)
+        const traceMeta: any = {
+          file_bytes_var: `file_bytes_${idx}`,
+          filename: loadedFile.file.name,
+          channel: trace.channel,
+          label: trace.label
+        };
+
+        // Add time window if specified
+        if (trace.timeFrame) {
+          traceMeta.time_start = trace.timeFrame.start;
+          traceMeta.time_end = trace.timeFrame.end;
+        }
+
+        // Add color if specified
+        if (trace.color) {
+          traceMeta.color = trace.color;
+        }
+
+        traceMetadata.push(traceMeta);
+      }
+
+      if (traceMetadata.length < 2) {
+        setError('Could not load data for enough traces (minimum 2 required)');
+        setIsAnalyzing(false);
+        setLoadingMessage('');
+        return;
+      }
+
+      // Set metadata and params in Python globals
+      pyodideRef.current.globals.set('traces_metadata', traceMetadata);
+      pyodideRef.current.globals.set('comparison_psd_params', comparisonPsdParams);
+      pyodideRef.current.globals.set('use_resutil_style', useResutilStyle);
+
+      // Build traces config in Python by converting bytes and merging with metadata
+      const result = await pyodideRef.current.runPythonAsync(`
+import json
+
+# Convert JsProxy objects to Python objects
+traces_metadata_py = traces_metadata.to_py()
+comparison_psd_params_py = comparison_psd_params.to_py()
+
+# Build traces config by converting JS bytes to Python bytes
+traces_config = []
+for trace_meta in traces_metadata_py:
+    # Get the file bytes variable name
+    file_bytes_var = trace_meta['file_bytes_var']
+
+    # Convert JS Uint8Array to Python bytes
+    js_bytes = globals()[file_bytes_var]
+    py_bytes = bytes(js_bytes)
+
+    # Build trace config with Python bytes
+    trace_config = {
+        'file_bytes': py_bytes,
+        'filename': trace_meta['filename'],
+        'channel': trace_meta['channel'],
+        'label': trace_meta['label']
+    }
+
+    # Add optional fields
+    if 'time_start' in trace_meta:
+        trace_config['time_start'] = trace_meta['time_start']
+    if 'time_end' in trace_meta:
+        trace_config['time_end'] = trace_meta['time_end']
+    if 'color' in trace_meta:
+        trace_config['color'] = trace_meta['color']
+
+    traces_config.append(trace_config)
+
+print(f"Built {len(traces_config)} trace configurations")
+
+# Call the comparison PSD function
+result_json = generate_comparison_psd(
+    traces_config,
+    comparison_psd_params_py,
+    use_resutil_style
+)
+
+result_json
+      `);
+
+      const parsedResult = JSON.parse(result);
+
+      if (parsedResult.success) {
+        setCurrentComparisonPlot(parsedResult.plot_base64);
+
+        // Add to analysis results so it can be included in reports
+        const comparisonResult: AnalysisResult = {
+          id: `comparison_${Date.now()}`,
+          analysis_type: 'PSD Comparison',
+          plot_base64: parsedResult.plot_base64,
+          success: true,
+          message: comparisonPlotName || `PSD Comparison (${comparisonTraces.length} traces)`,
+          parameters: { ...comparisonPsdParams },
+          data: {
+            traces: comparisonTraces.map(t => ({
+              label: t.label,
+              channel: t.channel,
+              fileId: t.fileId,
+              timeFrame: t.timeFrame
+            })),
+            trace_count: comparisonTraces.length
+          }
+        };
+
+        setAnalysisResults(prev => [...prev, comparisonResult]);
+        setSuccess(`Successfully generated comparison plot with ${comparisonTraces.length} traces. Added to analysis results.`);
+        console.log('Comparison plot generated successfully and added to analysis results');
+      } else {
+        setError(`Failed to generate comparison plot: ${parsedResult.error}`);
+        console.error('Comparison plot error:', parsedResult.error);
+        if (parsedResult.traceback) {
+          console.error('Python traceback:', parsedResult.traceback);
+        }
+      }
+
+    } catch (error) {
+      console.error('Error generating comparison plot:', error);
+      setError(`Failed to generate comparison plot: ${error}`);
+    } finally {
+      setIsAnalyzing(false);
+      setLoadingMessage('');
+    }
+  }, [
+    pyodideReady,
+    comparisonTraces,
+    loadedFiles,
+    comparisonPsdParams,
+    useResutilStyle
+  ]);
 
   const runSSVEPAnalysis = async () => {
     if (!pyodideReady || !currentFile) {
@@ -3269,28 +3880,85 @@ export_modified_edf()
             </>
           ) : (
             <>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-3">
-                  <div className="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center">
-                    <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
+              <h2 className="text-lg font-semibold mb-3">Loaded Files ({loadedFiles.length})</h2>
+
+              {/* File list */}
+              <div className="space-y-2 mb-4">
+                {loadedFiles.map((loadedFile) => (
+                  <div
+                    key={loadedFile.id}
+                    className={`border rounded-lg p-3 transition-all ${
+                      loadedFile.id === activeFileId
+                        ? 'border-blue-500 bg-blue-50'
+                        : 'border-gray-200 hover:border-gray-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-3 flex-1">
+                        {/* Active indicator */}
+                        {loadedFile.id === activeFileId ? (
+                          <div className="w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center flex-shrink-0">
+                            <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                            </svg>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => switchToFile(loadedFile.id)}
+                            className="w-6 h-6 border-2 border-gray-300 rounded-full hover:border-blue-500 transition-colors flex-shrink-0"
+                            title="Switch to this file"
+                          />
+                        )}
+
+                        {/* File info */}
+                        <div className="flex-1 min-w-0">
+                          <input
+                            type="text"
+                            value={loadedFile.nickname}
+                            onChange={(e) => updateFileNickname(loadedFile.id, e.target.value)}
+                            className="font-medium text-sm text-gray-900 bg-transparent border-none focus:outline-none focus:ring-1 focus:ring-blue-500 rounded px-1 w-full"
+                            placeholder="File nickname"
+                          />
+                          <p className="text-xs text-gray-500 truncate">
+                            {loadedFile.metadata.filename} • {loadedFile.metadata.num_channels} channels • {loadedFile.metadata.duration_seconds?.toFixed(1)}s
+                          </p>
+                        </div>
+
+                        {/* Actions */}
+                        <div className="flex items-center space-x-2">
+                          {loadedFile.id !== activeFileId && (
+                            <button
+                              onClick={() => switchToFile(loadedFile.id)}
+                              className="text-xs bg-blue-100 hover:bg-blue-200 text-blue-700 px-2 py-1 rounded transition-colors"
+                            >
+                              Switch
+                            </button>
+                          )}
+                          <button
+                            onClick={() => removeFile(loadedFile.id)}
+                            className="text-xs bg-red-100 hover:bg-red-200 text-red-700 px-2 py-1 rounded transition-colors"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="text-sm font-medium text-gray-900">File Loaded: {currentFile.name}</h3>
-                    <p className="text-xs text-gray-500">Ready for analysis</p>
-                  </div>
-                </div>
-                
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={!pyodideReady}
-                  className="bg-gray-600 hover:bg-gray-700 text-white text-sm py-1 px-3 rounded disabled:opacity-50 transition-colors"
-                >
-                  Change File
-                </button>
+                ))}
               </div>
-              
+
+              {/* Add another file button */}
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={!pyodideReady}
+                className="w-full bg-green-600 hover:bg-green-700 text-white text-sm font-medium py-2 px-4 rounded disabled:opacity-50 transition-colors flex items-center justify-center space-x-2"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                <span>Add Another File</span>
+              </button>
+
               <input
                 type="file"
                 ref={fileInputRef}
@@ -3358,6 +4026,544 @@ export_modified_edf()
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Comparison Builder - Only shown when multiple files are loaded */}
+        {loadedFiles.length >= 2 && (
+          <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-semibold">PSD Comparison Builder</h3>
+                <p className="text-sm text-gray-600">Compare power spectra from multiple files or time periods</p>
+              </div>
+              <button
+                onClick={() => {
+                  setComparisonMode(!comparisonMode);
+                  if (!comparisonMode) {
+                    // Entering comparison mode - reset traces
+                    setComparisonTraces([]);
+                    resetTraceBuilder();
+                  }
+                }}
+                className={`px-4 py-2 rounded font-medium transition-colors ${
+                  comparisonMode
+                    ? 'bg-red-600 hover:bg-red-700 text-white'
+                    : 'bg-purple-600 hover:bg-purple-700 text-white'
+                }`}
+              >
+                {comparisonMode ? 'Exit Comparison Mode' : 'Enter Comparison Mode'}
+              </button>
+            </div>
+
+            {comparisonMode && (
+              <div className="space-y-6">
+                {/* Trace Builder Form */}
+                <div className="border border-purple-200 rounded-lg p-4 bg-purple-50">
+                  <h4 className="font-semibold mb-3 text-purple-900">
+                    {editingTraceId ? 'Edit Trace' : 'Add New Trace'}
+                  </h4>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* File Selection */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        File *
+                      </label>
+                      <select
+                        value={traceBuilderFileId}
+                        onChange={(e) => {
+                          setTraceBuilderFileId(e.target.value);
+                          const file = loadedFiles.find(f => f.id === e.target.value);
+                          if (file && file.metadata.channel_names && file.metadata.channel_names.length > 0) {
+                            setTraceBuilderChannel(file.metadata.channel_names[0]);
+                          }
+                          if (file && file.metadata.duration_seconds) {
+                            setTraceBuilderTimeEnd(file.metadata.duration_seconds);
+                          }
+                        }}
+                        className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      >
+                        <option value="">Select a file...</option>
+                        {loadedFiles.map(file => (
+                          <option key={file.id} value={file.id}>
+                            {file.nickname} ({file.metadata.filename})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Channel Selection */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Channel *
+                      </label>
+                      <select
+                        value={traceBuilderChannel}
+                        onChange={(e) => setTraceBuilderChannel(e.target.value)}
+                        disabled={!traceBuilderFileId}
+                        className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:bg-gray-100"
+                      >
+                        <option value="">Select a channel...</option>
+                        {traceBuilderFileId &&
+                          loadedFiles
+                            .find(f => f.id === traceBuilderFileId)
+                            ?.metadata.channel_names?.map(channel => (
+                              <option key={channel} value={channel}>
+                                {channel}
+                              </option>
+                            ))}
+                      </select>
+                    </div>
+
+                    {/* Time Frame Toggle */}
+                    <div className="md:col-span-2">
+                      <label className="flex items-center space-x-2">
+                        <input
+                          type="checkbox"
+                          checked={traceBuilderUseTimeFrame}
+                          onChange={(e) => setTraceBuilderUseTimeFrame(e.target.checked)}
+                          className="rounded text-purple-600 focus:ring-purple-500"
+                        />
+                        <span className="text-sm font-medium text-gray-700">
+                          Use custom time window (optional)
+                        </span>
+                      </label>
+                    </div>
+
+                    {/* Time Window */}
+                    {traceBuilderUseTimeFrame && (
+                      <>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Start Time (seconds)
+                          </label>
+                          <input
+                            type="number"
+                            value={traceBuilderTimeStart}
+                            onChange={(e) => setTraceBuilderTimeStart(parseFloat(e.target.value))}
+                            min={0}
+                            max={traceBuilderTimeEnd}
+                            step={0.1}
+                            className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            End Time (seconds)
+                          </label>
+                          <input
+                            type="number"
+                            value={traceBuilderTimeEnd}
+                            onChange={(e) => setTraceBuilderTimeEnd(parseFloat(e.target.value))}
+                            min={traceBuilderTimeStart}
+                            max={
+                              traceBuilderFileId
+                                ? loadedFiles.find(f => f.id === traceBuilderFileId)?.metadata.duration_seconds || 100
+                                : 100
+                            }
+                            step={0.1}
+                            className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          />
+                        </div>
+                      </>
+                    )}
+
+                    {/* Legend Label */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Legend Label (optional)
+                      </label>
+                      <input
+                        type="text"
+                        value={traceBuilderLabel}
+                        onChange={(e) => setTraceBuilderLabel(e.target.value)}
+                        placeholder="Auto-generated if left empty"
+                        className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      />
+                    </div>
+
+                    {/* Color Picker */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Line Color (optional)
+                      </label>
+                      <div className="flex space-x-2">
+                        <input
+                          type="color"
+                          value={traceBuilderColor || '#3B82F6'}
+                          onChange={(e) => setTraceBuilderColor(e.target.value)}
+                          className="h-10 w-16 border border-gray-300 rounded cursor-pointer"
+                        />
+                        <input
+                          type="text"
+                          value={traceBuilderColor}
+                          onChange={(e) => setTraceBuilderColor(e.target.value)}
+                          placeholder="#RRGGBB (auto if empty)"
+                          className="flex-1 px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="flex justify-end space-x-2 mt-4">
+                    {editingTraceId && (
+                      <button
+                        onClick={resetTraceBuilder}
+                        className="px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded transition-colors"
+                      >
+                        Cancel Edit
+                      </button>
+                    )}
+                    <button
+                      onClick={addOrUpdateTrace}
+                      disabled={!traceBuilderFileId || !traceBuilderChannel}
+                      className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      {editingTraceId ? 'Update Trace' : 'Add Trace'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Configured Traces List */}
+                {comparisonTraces.length > 0 && (
+                  <div className="border border-gray-300 rounded-lg p-4">
+                    <h4 className="font-semibold mb-3">
+                      Configured Traces ({comparisonTraces.length})
+                    </h4>
+                    <div className="space-y-2">
+                      {comparisonTraces.map((trace, index) => {
+                        const traceFile = loadedFiles.find(f => f.id === trace.fileId);
+                        return (
+                          <div
+                            key={trace.id}
+                            className="flex items-center justify-between p-3 bg-gray-50 rounded border border-gray-200"
+                          >
+                            <div className="flex items-center space-x-3 flex-1">
+                              {/* Color indicator */}
+                              {trace.color && (
+                                <div
+                                  className="w-4 h-4 rounded-full border border-gray-300"
+                                  style={{ backgroundColor: trace.color }}
+                                />
+                              )}
+                              <div className="flex-1 min-w-0">
+                                <p className="font-medium text-sm truncate">{trace.label}</p>
+                                <p className="text-xs text-gray-600">
+                                  {traceFile?.nickname} • {trace.channel}
+                                  {trace.timeFrame &&
+                                    ` • ${trace.timeFrame.start.toFixed(1)}-${trace.timeFrame.end.toFixed(1)}s`}
+                                </p>
+                              </div>
+                            </div>
+
+                            {/* Action buttons */}
+                            <div className="flex items-center space-x-1">
+                              <button
+                                onClick={() => moveTraceUp(trace.id)}
+                                disabled={index === 0}
+                                className="p-1 text-gray-600 hover:text-gray-800 disabled:opacity-30 disabled:cursor-not-allowed"
+                                title="Move up"
+                              >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                                </svg>
+                              </button>
+                              <button
+                                onClick={() => moveTraceDown(trace.id)}
+                                disabled={index === comparisonTraces.length - 1}
+                                className="p-1 text-gray-600 hover:text-gray-800 disabled:opacity-30 disabled:cursor-not-allowed"
+                                title="Move down"
+                              >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                </svg>
+                              </button>
+                              <button
+                                onClick={() => editTrace(trace.id)}
+                                className="p-1 text-blue-600 hover:text-blue-800"
+                                title="Edit"
+                              >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                </svg>
+                              </button>
+                              <button
+                                onClick={() => removeTrace(trace.id)}
+                                className="p-1 text-red-600 hover:text-red-800"
+                                title="Remove"
+                              >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* PSD Parameters for Comparison */}
+                {comparisonTraces.length > 0 && (
+                  <div className="border border-blue-200 rounded-lg p-4 bg-blue-50">
+                    <h4 className="font-semibold mb-3 text-blue-900">
+                      PSD Parameters (Shared Across All Traces)
+                    </h4>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      {/* Method */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Method
+                        </label>
+                        <select
+                          value={comparisonPsdParams.method}
+                          onChange={(e) =>
+                            setComparisonPsdParams({
+                              ...comparisonPsdParams,
+                              method: e.target.value as 'welch' | 'periodogram'
+                            })
+                          }
+                          className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                          <option value="welch">Welch</option>
+                          <option value="periodogram">Periodogram</option>
+                        </select>
+                      </div>
+
+                      {/* Frequency Min */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Min Frequency (Hz)
+                        </label>
+                        <input
+                          type="number"
+                          value={comparisonPsdParams.fmin}
+                          onChange={(e) =>
+                            setComparisonPsdParams({
+                              ...comparisonPsdParams,
+                              fmin: parseFloat(e.target.value)
+                            })
+                          }
+                          min={0}
+                          step={0.1}
+                          className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+
+                      {/* Frequency Max */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Max Frequency (Hz)
+                        </label>
+                        <input
+                          type="number"
+                          value={comparisonPsdParams.fmax}
+                          onChange={(e) =>
+                            setComparisonPsdParams({
+                              ...comparisonPsdParams,
+                              fmax: parseFloat(e.target.value)
+                            })
+                          }
+                          min={comparisonPsdParams.fmin}
+                          step={0.1}
+                          className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+
+                      {/* Welch-specific parameters */}
+                      {comparisonPsdParams.method === 'welch' && (
+                        <>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              Window Size (seconds)
+                            </label>
+                            <input
+                              type="number"
+                              value={comparisonPsdParams.nperseg_seconds}
+                              onChange={(e) =>
+                                setComparisonPsdParams({
+                                  ...comparisonPsdParams,
+                                  nperseg_seconds: parseFloat(e.target.value)
+                                })
+                              }
+                              min={0.1}
+                              step={0.1}
+                              className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              Overlap Proportion
+                            </label>
+                            <input
+                              type="number"
+                              value={comparisonPsdParams.noverlap_proportion}
+                              onChange={(e) =>
+                                setComparisonPsdParams({
+                                  ...comparisonPsdParams,
+                                  noverlap_proportion: parseFloat(e.target.value)
+                                })
+                              }
+                              min={0}
+                              max={0.99}
+                              step={0.05}
+                              className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              Window Type
+                            </label>
+                            <select
+                              value={comparisonPsdParams.window}
+                              onChange={(e) =>
+                                setComparisonPsdParams({
+                                  ...comparisonPsdParams,
+                                  window: e.target.value
+                                })
+                              }
+                              className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            >
+                              <option value="hamming">Hamming</option>
+                              <option value="hann">Hann</option>
+                              <option value="blackman">Blackman</option>
+                              <option value="bartlett">Bartlett</option>
+                            </select>
+                          </div>
+                        </>
+                      )}
+
+                      {/* Resutil styling toggle */}
+                      <div className="md:col-span-3">
+                        <label className="flex items-center space-x-2">
+                          <input
+                            type="checkbox"
+                            checked={useResutilStyle}
+                            onChange={(e) => setUseResutilStyle(e.target.checked)}
+                            className="rounded text-blue-600 focus:ring-blue-500"
+                          />
+                          <span className="text-sm font-medium text-gray-700">
+                            Use Optoceutics custom styling (resutil)
+                          </span>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Generate Comparison Plot Button */}
+                {comparisonTraces.length >= 2 && (
+                  <div className="text-center">
+                    <button
+                      onClick={generateComparisonPlot}
+                      disabled={isAnalyzing}
+                      className="px-6 py-3 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white font-semibold rounded-lg shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                    >
+                      {isAnalyzing ? 'Generating...' : `Generate Comparison Plot (${comparisonTraces.length} traces)`}
+                    </button>
+                    <p className="text-xs text-gray-600 mt-2">
+                      Minimum 2 traces required for comparison
+                    </p>
+                  </div>
+                )}
+
+                {/* Current Comparison Plot Display */}
+                {currentComparisonPlot && (
+                  <div className="border border-green-200 rounded-lg p-4 bg-green-50">
+                    <h4 className="font-semibold mb-3 text-green-900">Generated Comparison Plot</h4>
+                    <img
+                      src={`data:image/png;base64,${currentComparisonPlot}`}
+                      alt="Comparison PSD Plot"
+                      className="w-full rounded border border-gray-300 mb-3"
+                    />
+
+                    {/* Save comparison plot */}
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="text"
+                        value={comparisonPlotName}
+                        onChange={(e) => setComparisonPlotName(e.target.value)}
+                        placeholder="Enter comparison name..."
+                        className="flex-1 px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-green-500"
+                      />
+                      <button
+                        onClick={saveComparisonPlot}
+                        disabled={!comparisonPlotName.trim()}
+                        className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        Save Comparison
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Saved Comparison Plots */}
+        {comparisonPlots.length > 0 && (
+          <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+            <h3 className="text-lg font-semibold mb-4">Saved Comparison Plots ({comparisonPlots.length})</h3>
+            <div className="space-y-3">
+              {comparisonPlots.map(plot => (
+                <div key={plot.id} className="border border-gray-200 rounded-lg p-4 hover:border-purple-300 transition-colors">
+                  <div className="flex items-start justify-between mb-2">
+                    <div className="flex-1">
+                      <h4 className="font-semibold text-gray-900">{plot.name}</h4>
+                      <p className="text-sm text-gray-600">
+                        {plot.traces.length} traces • {plot.parameters.method} • {plot.parameters.fmin}-{plot.parameters.fmax} Hz
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        Created: {new Date(plot.createdAt).toLocaleString()}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => deleteComparisonPlot(plot.id)}
+                      className="text-red-600 hover:text-red-800"
+                      title="Delete"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  </div>
+
+                  {/* Collapsible plot preview */}
+                  <details className="mt-2">
+                    <summary className="cursor-pointer text-sm text-blue-600 hover:text-blue-800">
+                      View plot and details
+                    </summary>
+                    <div className="mt-3 space-y-2">
+                      <img
+                        src={`data:image/png;base64,${plot.plotBase64}`}
+                        alt={plot.name}
+                        className="w-full rounded border border-gray-300"
+                      />
+                      <div className="text-xs text-gray-700">
+                        <p className="font-semibold mb-1">Traces:</p>
+                        <ul className="list-disc list-inside space-y-1">
+                          {plot.traces.map(trace => {
+                            const traceFile = loadedFiles.find(f => f.id === trace.fileId);
+                            return (
+                              <li key={trace.id}>
+                                {trace.label} ({traceFile?.nickname || 'Unknown file'} - {trace.channel})
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
+                    </div>
+                  </details>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
