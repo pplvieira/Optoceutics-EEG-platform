@@ -14,7 +14,15 @@ import base64
 import tempfile
 import os
 
-def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False):
+# Try to import FOOOF for alpha peak detection
+FOOOF_AVAILABLE = False
+try:
+    from fooof import FOOOF
+    FOOOF_AVAILABLE = True
+except ImportError:
+    print("FOOOF not available - alpha peak detection will be disabled")
+
+def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, show_alpha_peaks=False):
     """
     Generate a comparison PSD plot with multiple traces
     Uses the same loading and processing methods as the existing PSD tool
@@ -67,6 +75,9 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False):
         except ImportError:
             MNE_AVAILABLE = False
             print("Warning: MNE not available, falling back to pyedflib")
+
+        # Store alpha peak information for each trace
+        trace_alpha_peaks = []
 
         # Process each trace
         for idx, trace in enumerate(traces_config):
@@ -164,6 +175,48 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False):
                 freqs_filtered = freqs[freq_mask]
                 psd_filtered = psd[freq_mask]
 
+                # Compute alpha peaks using FOOOF if requested
+                alpha_peak_info = None
+                if show_alpha_peaks and FOOOF_AVAILABLE:
+                    try:
+                        # Run FOOOF to detect alpha peaks (8-12 Hz)
+                        fm = FOOOF(
+                            peak_width_limits=[0.5, 12],
+                            max_n_peaks=6,
+                            min_peak_height=0.1,
+                            aperiodic_mode='fixed',
+                            verbose=False
+                        )
+
+                        # Fit FOOOF model on full frequency range (not just fmin-fmax)
+                        # Use 1-50 Hz range for better FOOOF fitting
+                        fooof_freq_mask = (freqs >= 1) & (freqs <= 50)
+                        freqs_fooof = freqs[fooof_freq_mask]
+                        psd_fooof = psd[fooof_freq_mask]
+
+                        fm.fit(freqs_fooof, psd_fooof)
+
+                        # Extract alpha peaks (8-12 Hz)
+                        peak_params = fm.peak_params_
+                        if len(peak_params) > 0:
+                            for peak in peak_params:
+                                center_freq, power, bandwidth = peak
+                                if 8 <= center_freq <= 12:
+                                    alpha_peak_info = {
+                                        'frequency': float(center_freq),
+                                        'power': float(power),
+                                        'bandwidth': float(bandwidth),
+                                        'label': label,
+                                        'color': trace.get('color', default_colors[idx % len(default_colors)])
+                                    }
+                                    print(f"  Found alpha peak at {center_freq:.1f} Hz for {label}")
+                                    break  # Use first alpha peak found
+                    except Exception as e:
+                        print(f"  Warning: FOOOF analysis failed for {label}: {e}")
+
+                # Store alpha peak info
+                trace_alpha_peaks.append(alpha_peak_info)
+
                 # Get color - use custom color if specified, otherwise use palette
                 color = trace.get('color', default_colors[idx % len(default_colors)])
 
@@ -183,6 +236,56 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False):
                 import traceback
                 traceback.print_exc()
                 continue
+
+        # Add alpha peak labels if computed
+        if show_alpha_peaks:
+            # Collect valid alpha peaks
+            valid_peaks = [p for p in trace_alpha_peaks if p is not None]
+
+            if valid_peaks:
+                print(f"\nAdding alpha peak labels to plot ({len(valid_peaks)} peaks found)")
+
+                # Add labels for each trace with alpha peak
+                for peak_info in valid_peaks:
+                    freq = peak_info['frequency']
+                    label_text = peak_info['label']
+                    color = peak_info['color']
+
+                    # Find the y-position at this frequency (approximate from plot limits)
+                    # Place label at the top of the plot area
+                    ylim = ax.get_ylim()
+                    label_y = ylim[1] * 0.8  # Place at 80% of max y
+
+                    # Add text annotation
+                    ax.annotate(
+                        f'{label_text}\nα: {freq:.1f} Hz',
+                        xy=(freq, label_y),
+                        xytext=(0, 10),
+                        textcoords='offset points',
+                        ha='center',
+                        fontsize=8 if use_resutil_style else 7,
+                        color=color,
+                        fontweight='bold',
+                        bbox=dict(
+                            boxstyle='round,pad=0.4',
+                            facecolor='white',
+                            edgecolor=color,
+                            alpha=0.9,
+                            linewidth=1.5
+                        ),
+                        arrowprops=dict(
+                            arrowstyle='->',
+                            color=color,
+                            linewidth=1.5,
+                            connectionstyle='arc3,rad=0'
+                        )
+                    )
+
+                print(f"✓ Added {len(valid_peaks)} alpha peak labels to plot")
+            elif show_alpha_peaks and FOOOF_AVAILABLE:
+                print("  No alpha peaks detected in the 8-12 Hz range for any trace")
+            elif show_alpha_peaks and not FOOOF_AVAILABLE:
+                print("  Warning: FOOOF not available - cannot compute alpha peaks")
 
         # Configure plot
         # When resutil styling is enabled, let it control font settings

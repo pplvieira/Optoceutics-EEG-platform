@@ -163,6 +163,9 @@ export default function PyodideEDFProcessor() {
   // Resutil styling toggle
   const [useResutilStyle, setUseResutilStyle] = useState(false);
 
+  // Alpha peaks toggle for comparison plots
+  const [showAlphaPeaks, setShowAlphaPeaks] = useState(false);
+
   // Comparison mode state
   const [comparisonMode, setComparisonMode] = useState<boolean>(false);
   const [comparisonTraces, setComparisonTraces] = useState<ComparisonTrace[]>([]);
@@ -3094,6 +3097,7 @@ export_modified_edf()
       pyodideRef.current.globals.set('traces_metadata', traceMetadata);
       pyodideRef.current.globals.set('comparison_psd_params', comparisonPsdParams);
       pyodideRef.current.globals.set('use_resutil_style', useResutilStyle);
+      pyodideRef.current.globals.set('show_alpha_peaks', showAlphaPeaks);
 
       // Build traces config in Python by converting bytes and merging with metadata
       const result = await pyodideRef.current.runPythonAsync(`
@@ -3137,7 +3141,8 @@ print(f"Built {len(traces_config)} trace configurations")
 result_json = generate_comparison_psd(
     traces_config,
     comparison_psd_params_py,
-    use_resutil_style
+    use_resutil_style,
+    show_alpha_peaks
 )
 
 result_json
@@ -3190,7 +3195,8 @@ result_json
     comparisonTraces,
     loadedFiles,
     comparisonPsdParams,
-    useResutilStyle
+    useResutilStyle,
+    showAlphaPeaks
   ]);
 
   const runSSVEPAnalysis = async () => {
@@ -4452,6 +4458,24 @@ result_json
                             Use Optoceutics custom styling (resutil)
                           </span>
                         </label>
+                      </div>
+
+                      {/* Alpha peaks toggle */}
+                      <div className="md:col-span-3">
+                        <label className="flex items-center space-x-2">
+                          <input
+                            type="checkbox"
+                            checked={showAlphaPeaks}
+                            onChange={(e) => setShowAlphaPeaks(e.target.checked)}
+                            className="rounded text-green-600 focus:ring-green-500"
+                          />
+                          <span className="text-sm font-medium text-gray-700">
+                            Show alpha peak centroids (FOOOF)
+                          </span>
+                        </label>
+                        <p className="text-xs text-gray-500 ml-6 mt-1">
+                          Compute and display alpha peak (8-12 Hz) frequencies using FOOOF analysis
+                        </p>
                       </div>
                     </div>
                   </div>
