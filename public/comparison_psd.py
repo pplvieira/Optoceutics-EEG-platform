@@ -254,13 +254,18 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, 
                 num_peaks = len(valid_peaks)
                 if num_peaks == 1:
                     y_positions = [0.85]  # Single peak at 85%
+                    x_offsets = [0]  # No horizontal offset for single peak
                 elif num_peaks == 2:
                     y_positions = [0.90, 0.75]  # Two peaks staggered
+                    x_offsets = [-2, 2]  # Offset left and right
                 elif num_peaks == 3:
                     y_positions = [0.90, 0.78, 0.66]  # Three peaks staggered
+                    x_offsets = [-3, 0, 3]  # Left, center, right
                 else:
                     # For 4+ peaks, distribute evenly between 65-90%
                     y_positions = [0.90 - (i * 0.08) for i in range(num_peaks)]
+                    # Alternate left and right offsets
+                    x_offsets = [(-3 if i % 2 == 0 else 3) for i in range(num_peaks)]
 
                 # Add labels for each trace with alpha peak
                 for idx, peak_info in enumerate(valid_peaks):
@@ -271,6 +276,10 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, 
                     y_fraction = y_positions[idx % len(y_positions)]
                     label_y = ylim[0] + (y_range * y_fraction)
 
+                    # Get x-offset for angled arrow
+                    x_offset = x_offsets[idx % len(x_offsets)]
+                    label_x = freq + x_offset
+
                     # Find the actual PSD value at this frequency for arrow placement
                     # Place arrow at a reasonable point on the trace
                     arrow_y = ylim[0] + (y_range * 0.3)  # Arrow points to 30% height
@@ -278,14 +287,14 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, 
                     # Simplified text - just the alpha peak frequency
                     label_text = f'Alpha: {freq:.1f} Hz'
 
-                    # Add text annotation with arrow, no box
+                    # Add text annotation with angled arrow, no box
                     ax.annotate(
                         label_text,
                         xy=(freq, arrow_y),  # Arrow points to this location
-                        xytext=(freq, label_y),  # Text appears here
+                        xytext=(label_x, label_y),  # Text appears here (offset creates angle)
                         ha='center',
                         va='bottom',
-                        fontsize=7 if use_resutil_style else 6,
+                        fontsize=14 if use_resutil_style else 12,  # 2x bigger
                         color=color,
                         fontweight='normal',
                         arrowprops=dict(
