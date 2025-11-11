@@ -1,0 +1,106 @@
+---
+#title: "Power Spectral Density Estimation"
+#author: "Mark Alexander Henney"
+#date: "May 2023"
+output:
+  # bookdown::html_document2: default
+  bookdown::html_document2: 
+    toc: no
+    number_sections: no
+---
+
+```{r, eval=T, message=FALSE, warning=FALSE, echo = FALSE}
+library(dplyr)
+library(ggplot2)
+library(RColorBrewer)
+library(lme4)
+library(lmerTest)
+library(emmeans)
+library(xtable)
+library(glue)
+library(summarytools)
+library(doBy) # maxn
+library(latex2exp) # tex labels
+```
+
+```{r setup, echo=F}
+library(reticulate)
+use_python("/Library/Frameworks/Python.framework/Versions/3.9/bin/python3")
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+```{python, echo=F, message=F}
+import warnings
+warnings.filterwarnings('ignore')
+SIMULATE = 0
+```
+
+# Welch's Method
+
+Within each epoch, the PSD can be estimated by the [Welch method](https://en.wikipedia.org/wiki/Welch%27s_method),
+which is a generalisation of the [Bartlett method](https://en.wikipedia.org/wiki/Bartlett%27s_method) with variable
+overlap and windowing, and which itself is a generalisation of the [periodogram](https://en.wikipedia.org/wiki/Periodogram)
+with averaging over segments. The following is a description of Welch's method for estimating the PSD, which (by
+chosing certain parameters) can also produce a Bartlett PSD or a periodogram.
+
+For each of $M$ sub-samples with $R$ overlap, the $m$'th sub-sample with length $L$ is defined as
+
+\begin{equation}
+    %x_m(n) = x((m K + n) \quad n = 0, \ldots, N - 1 \quad m=0, \ldots, M-1,
+    x_{ikm}(n) = x_k((m R L + n) \quad n = 0, 1, \ldots, L - 1 \quad m=0, 1, \ldots, M-1,
+    (\#eq:b1)
+\end{equation}
+
+where $L=N/M$ is the length of each segment, and $x_{ik}(n)$ is the original one-dimensional time series of a channel,
+$k$, in epoch $i$ with length $N$. This is weighted by the boxcar window (other windows can be used but will smooth
+the spectrum, which my not be desireble for the expected Kronecker-delta shaped SSVEP shape):
+
+\begin{equation}
+    w(n) = \operatorname{boxcar}_L(n)=\left\{\begin{array}{cl}
+    1 & 0 \leq n \leq L-1 \\
+    0 & \text { Otherwise }
+    \end{array}\right., \quad n=0,1, \ldots, L-1.
+    (\#eq:b2)
+\end{equation}
+
+Thus, the sub-sample is expressed as
+
+\begin{equation}
+    x_{ikm}^w(n) = w(n) \odot x_{ikm}(n),
+    (\#eq:b4)
+\end{equation}
+
+where $\odot$ is the elementwise (Hadamard) product. From this, the Welch PSD for epoch $i$ is obtained as the average over the periodograms of the tapered sub-samples:
+
+\begin{equation}
+    \hat{S}_{ik}^w(f) = \frac{1}{M} \sum_{m=M} \mathrm{PSD}_{ikm}(f), 
+    (\#eq:b5)
+\end{equation}
+
+in which
+
+\begin{equation}
+    \mathrm{PSD}_{ikm}(f) = \frac{1}{L} \left| \sum_{n=1}^L x_{ikm}^w(n) e^{-j 2 \pi f n} \right|^2, \quad 
+    f = -F, -F + \frac{f_s}{L}, \ldots, F
+    (\#eq:b6)
+\end{equation}
+
+for sampling frequency $f_s$ and $F = \frac{f_s}{2}$.
+
+# Averaging across channels
+
+The power spectra, $\hat{S}_{ik}^w(f)$ can be averaged across channels; e.g. the O1 and O2 electrodes to
+obtain the mean occipital power spectrum:
+
+\begin{equation}
+    \hat{S}_{i,\mathrm{O}}^w(f) = \frac{1}{2} \left(\hat{S}_{i,\mathrm{O1}}^w(f) + \hat{S}_{i,\mathrm{O2}}^w(f) \right).
+    (\#eq:b6-1)
+\end{equation}
+
+The resulting spectrum for stimulation with $40\mathrm{ Hz}$ is then obtained:
+
+```{r spec-40-cond-pyfig, echo=FALSE, out.width='100%', fig.cap="**Average Spectrum for 40 Hz Stimulus**"}
+knitr::include_graphics(
+  glue("../img/population_psd_cond-40 Hz.png")
+  )
+```

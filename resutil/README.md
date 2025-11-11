@@ -1,0 +1,161 @@
+# Research Utilities
+![Research Utilities](img/package_art.png)
+
+1. [Installation](#installation)
+2. [OC Signal Processing](#siglib)
+3. [OC Plotting Standards](#plotlib)
+4. [BIDS](#bids-utils)
+    1. [build_bids_structure](#build-bids)
+    2. [make_raw_bids](#make-raw)
+5. [Templates](#templates)
+
+### Contact <a name="contact"></a>
+* Project Owner: Mark Alexander Henney
+* Mail: mah@optoceutics.com
+
+This repository contains utility functions for the OC research team's general use to comply with industry- and internal standards.
+
+## Installation <a name="installation"></a>
+
+Install with pip:
+```bash
+python -m pip install git+https://optogit.optoceutics.com/optoceutics/research/resutil.git
+```
+
+## OC Signal Processing <a name="siglib"></a>
+
+`resutil.siglib` contains OC-specific EEG signal processing tools. On the [Opto-Wiki](https://sites.google.com/optoceutics.com/opto-wiki/research/methods),
+the methods are described in mathematical details and with simulations.
+
+## OC Plotting Standards <a name="plotlib"></a>
+
+`resutil.plotlib` contains the methods `set_oc_style()` and `set_oc_font()` which can be used to set the `matplotlib` style to the OC standard:
+
+<img src='img/plotlib_pre.png' width='350' /> <img src='img/plotlib_post.png' width='350' />
+
+## BIDS Utilities <a name="bids-utils"></a>
+
+`resutil.bids` contains methods to build [BIDS compliant](https://bids-specification.readthedocs.io/en/stable/) project structure and convert sourcedata to raw data (currently only implemented for EEG).
+
+### `resutils.bids.build_bids_structure()`  <a name="build-bids"></a>
+
+```python 
+build_bids_structure(root: str | Path)
+```
+
+Builds the main data folder structure for a project in its
+    `<PROJECT-NAME>/data/` folder along with mandatory descriptor files. This
+    creates the `sourcedata`, `raw`, and `derivatives` data directories, the 
+    `<PROJECT-NAME>/info` directory, and the `info/README.md`,
+    `data/dataset_description.json`, and `data/stimuli/stimuli_description.json` files.
+
+```mermaid
+flowchart LR
+    root[["root = '/path/to/data_dir/'"]] --- meth1("build_bids_structure()")
+    meth1 --> copy{copy}
+    meth1 --> mkdir
+    mkdir{mkdir}
+
+    subgraph directories
+        mkdir --> data_dir["PROJECT/data/"]
+        mkdir --> source_dir["PROJECT/data/sourcedata/"]
+        mkdir --> raw_dir["PROJECT/data/raw/"]
+        mkdir --> derivatives_dir["PROJECT/data/derivates/"]
+    end
+
+    tmp_readme --- copy --> readme
+    tmp_stimuli --- copy --> stimuli
+
+    subgraph templates
+        tmp_readme(template_README.md)
+        tmp_stimuli(template_STIMULI.json)
+    end
+
+    subgraph files
+        readme(PROJECT/info/README.md)
+        stimuli(PROJECT/data/stimuli/stimuli_description.json)
+    end    
+```
+
+### `resutils.bids.make_raw_bids()` <a name="make-raw"></a>
+```python 
+make_raw_bids(root: str | Path, subject_folder_pattern: str, ses_folder_pattern: str | None, 
+                task_id_dict: dict | None, run_id_dict: dict | None, filename_pattern: str, 
+                trigger_pattern: str, datatype: str = "EEG")
+```
+Builds BIDS-compatible raw folder structure and files. It requires specification
+    of several project-specific naming patterns to properly navigate the source directory and build
+    the raw directory, including the subject-, session-, run-, datafile-, and triggerfile patterns.
+    All patterns are required explicitly as inputs, though session- and run patterns can be `None` to
+    indicate that there are not multiple of these.
+
+Patterns are compatible with regular expressions.
+
+```mermaid
+flowchart LR
+    meth1("resutil.make_raw_bids()") --> bidsification
+    
+    subgraph args
+        root[["root: str | Path = '/path/to/data_dir/'"]]
+        subject_folder_pattern[["subject_folder_pattern: str"]]
+        ses_folder_pattern[["ses_folder_pattern: str | None"]]
+        task_id_dict[["task_id_dict: dict | None"]]
+        run_id_dict[["run_id_dict: dict | None"]]
+        filename_pattern[["filename_pattern: str"]]
+        trigger_pattern[["trigger_pattern: str"]]
+    end
+    root --- meth1
+    subject_folder_pattern --- meth1
+    ses_folder_pattern --- meth1
+    task_id_dict --- meth1
+    run_id_dict --- meth1
+    filename_pattern --- meth1
+    trigger_pattern --- meth1
+
+    sourde_dir["/data/source/"] --> copy
+
+    subgraph bidsification
+        copy{copy} --> reorganize{reorganize}
+        reorganize --> rename{rename}
+    end
+
+    rename -->|BIDS Compliant| raw_dir["/data/raw/"]
+```
+
+## Templates <a name="templates"></a>
+
+The folder `/templates/` contains commonly used templates. All template documents have the `template_` prefix. These are copied by the `resutil.bids.build_bids_structure()` method.
+
+### README.md
+
+`/templates/template_README.md` is a template README file for reserach projects. It contains example structure and text for describing data management and processing steps.
+
+### STIMULI.json
+Template for the stimuli `dict` used by the `libLEDController` to control light settings:
+
+```json
+{
+    "Blue":   {"set1": [1000, 0, 0, 0, 0,0 ], "set2": [0] * 6,   "mode": "set1",  "name": "Blue",  "frequency": 40}, 
+    "Cyan":   {"set1": [0, 1000, 0, 0, 0, 0], "set2": [0] * 6,   "mode": "set1",  "name": "Cyan",  "frequency": 40}, 
+    "Green":  {"set1": [0, 0, 1000, 0, 0, 0], "set2": [0] * 6,   "mode": "set1",  "name": "Green", "frequency": 40}, 
+    "Lime":   {"set1": [0, 0, 0, 1000, 0, 0], "set2": [0] * 6,   "mode": "set1",  "name": "Lime",  "frequency": 40}, 
+    "Amber":  {"set1": [0, 0, 0, 0, 1000, 0], "set2": [0] * 6,   "mode": "set1",  "name": "Amber", "frequency": 40},
+    "Red":    {"set1": [0, 0, 0, 0, 0, 1000], "set2": [0] * 6,   "mode": "set1",  "name": "Red",   "frequency": 40}
+}
+```
+
+## Code Style
+
+To automatically format python files to the python 3.11 style, use [Black "The uncompromising code formatter"](https://pypi.org/project/black/).
+
+Install it by running:
+
+```
+pip install git+https://github.com/psf/black
+```
+
+Then, to format a python file, use the following command (in which <FILE-PATH> substitutes the path to a file or directory):
+
+```
+black <FILE-PATH> --target-version py311
+```

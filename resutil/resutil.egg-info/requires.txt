@@ -1,0 +1,9 @@
+matplotlib
+markdown
+
+[full]
+mne
+mne_bids
+EDFlib-Python>=1.0.6
+numba
+fooof

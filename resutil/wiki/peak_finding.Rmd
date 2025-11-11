@@ -1,0 +1,162 @@
+---
+##title: "SNR Estimation Procedure"
+#author: "Mark Alexander Henney"
+#date: "May 2023"
+output:
+  # bookdown::html_document2: default
+  bookdown::html_document2: 
+    toc: no
+    number_sections: FALSE
+---
+
+```{r, eval=T, message=FALSE, warning=FALSE, echo = FALSE}
+library(dplyr)
+library(ggplot2)
+library(RColorBrewer)
+library(lme4)
+library(lmerTest)
+library(emmeans)
+library(xtable)
+library(glue)
+library(summarytools)
+library(doBy) # maxn
+library(latex2exp) # tex labels
+```
+
+```{r setup, echo=F}
+library(reticulate)
+use_python("/Library/Frameworks/Python.framework/Versions/3.9/bin/python3")
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+```{python, echo=F, message=F}
+import sys
+from pathlib import Path
+import warnings
+
+warnings.filterwarnings('ignore')
+
+#RESUTIL_DIR = Path() / ".." / "resutil"
+#sys.path.append(RESUTIL_DIR.resolve().as_posix())
+
+SIMULATE = 1
+```
+
+# Peak Finding
+
+It may be advantageous to search for SSVEP peaks that deviate slightly from the expected frequency due to
+either uncertainty in the sampling frequency or flicker frequency. In these cases, it is
+**important to not be too liberal** when detecting "peaks", otherwise we are prone to introduce a heavy
+(upwards) bias in the SSVEP estimate - especially in the baseline condition where there should essentially
+be no peak to be found. It is, however, also evident from experience that there is no guarantee of a visible
+SSVEP peak on a single trial level when stimulating with 40 Hz, as the synchronisation appears transient to some degree,
+and thus we want to avoid detecting peaks that are not present.
+
+Thus, a peak can not simply be reduced to the local maximum of a frequency band, and we must take into
+account the spread of the values in the band and set a peak threshold based on the probability that
+a "peak" is produced by noise.
+
+If we assume the noise is normally distributed with a mean, $\mu_N$, and variance, $\sigma_N^2$, i.e.:
+
+\begin{equation}
+  N(f) \sim \mathcal{N}(\mu_N, \sigma_N^2),
+  (\#eq:p1)
+\end{equation}
+
+we can determine an appropriate threshold with a known [false discovery rate](https://en.wikipedia.org/wiki/False_discovery_rate) (FDR).
+While the normality
+assumption is not guaranteed to hold due to the $1/f$ component (a problem that we will investigate later), it can
+probably be considered true for a narrow noise band. In the following, we will instead make use of the
+[standard normal distribution](https://en.wikipedia.org/wiki/Normal_distribution#:~:text=%5Bedit%5D-,Standard,-normal%20distribution%5B)
+for simplicity, and the two are related by the simple expression:
+
+\begin{equation}
+  \frac{N(f) - \mu_N}{\sigma_N} \sim \mathcal{N}(0, 1).
+  (\#eq:p2)
+\end{equation}
+
+Let's define an acceptable probability of falsely discovering a peak in the noise, $\alpha$, which is
+controllable and affects later inference. From the [_percent point function_](https://en.wikipedia.org/wiki/Quantile_function)
+for the standard normal
+distribution ($PPF_{\mathrm{snorm}}$) we can determine a value threshold, $t$, for a standard normal
+random variable, $X$, that would result in a fraction $\alpha$ of observations from $X$ above $t$:
+
+\begin{equation}
+  t = PPF_{\mathrm{snorm}} (\alpha).
+  (\#eq:p3)
+\end{equation}
+
+We could at this point convert $t$ to the domain of $N(f)$ using Equation \@ref(eq:p2) such that
+$t_N = \mu_N + t \cdot \sigma_N$ and have a threshold with $\alpha$ probability of $N(f)$
+producing a spurious peak. However, we also need to take into account that when we look for the
+local maximum in the noise, we are actually observing multiple candidates from $N(f)$.
+
+If the band in question contains $n$ points in the PSD, we can estimate the probability, $q$,
+that atleast $k=1$ of these will "succesfully" produce a false positive. To do this, we can use the
+[cummulative binomial distribution](https://en.wikipedia.org/wiki/Binomial_distribution#:~:text=0.059535.-,Cumulative,-distribution%20function%5B)
+function:
+
+\begin{equation}
+  q = F(k ; n, p) = \operatorname{Pr}(X \leq k) = \sum_{i=0}^{k}
+  \left(\begin{array}{c}
+    n \\
+    i
+  \end{array}\right) p^i(1-p)^{n-i},
+  (\#eq:p4)
+\end{equation}
+
+where $p$ is probability of a false positive, and
+
+\begin{equation}
+  \left(\begin{array}{l}
+    n \\
+    k
+  \end{array}\right)=\frac{n !}{k !(n-k) !} .
+  (\#eq:p4-1)
+\end{equation}
+
+However, we need to solve for the value of $p$ for which $q=\alpha$. While there may
+be a shorthand solution to this,
+[we do it iteratively](https://optogit.optoceutics.com/optoceutics/research/resutil/-/blob/siglib/resutil/siglib.py#L160)
+(by caching results we can actually expect O(1) [time complexity](https://en.wikipedia.org/wiki/Time_complexity)
+for many queries with the same parameters).
+
+Now we have corrected for multiple draws and obtained a probability, $p$, that can
+be plugged back into Equation \@ref(eq:p2) to obtain a more conservative threshold with an FDR
+of $\alpha$:
+
+\begin{equation}
+  t_{\mathrm{FDR}} = PPF_{\mathrm{snorm}} (q),
+  (\#eq:p5)
+\end{equation}
+
+and this threshold is once again tranformed to its original domain:
+
+\begin{equation}
+  t_{N,\mathrm{FDR}} = \mu_N + t_{\mathrm{FDR}} \cdot \sigma_N .
+  (\#eq:p6)
+\end{equation}
+
+```{python, echo=F, message=F, warning=F}
+if SIMULATE:
+  from tests.test_siglib import fpr_alpha_simulation
+  fpr_alpha_simulation()
+```
+
+In \@ref(fig:alpha-sim-fig), we investigate the effect of varying the FDR ($\alpha$) across
+values of 0.5, 0.2, 0.1, 0.01. From this, we see that for high values of $\alpha$, 
+the algorithm often detects spurious peaks in the noise, and the contrast estimate is very
+biased upwards compared to the expected (theoretical) value. For lower values of alpha - 
+especially $\alpha = 0.01$ - very few spurious peaks are detected in the noise.
+
+```{r echo=F}
+fdr_cap = "**Peak Finding FDR** | By varying $\\alpha$, we can control the false
+          discovery rate (FDR) of peaks in noise. $\\alpha = 0.1$ will produce 10%
+          false positive peaks in pure, normally distributed noise."
+```
+
+```{r alpha-sim-fig, echo=FALSE, out.width='100%', fig.cap=fdr_cap}
+knitr::include_graphics(
+  glue("../img/sim-contrast_alpha.png")
+  )
+```
