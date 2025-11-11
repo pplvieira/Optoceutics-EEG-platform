@@ -1,6 +1,6 @@
 """
 Multi-trace PSD Comparison Plot Generator
-Generates power spectral density comparison plots from multiple files/channels/time periods
+Uses the same EDF loading and PSD computation methods as the existing PSD tool
 """
 
 import json
@@ -11,37 +11,13 @@ import matplotlib.pyplot as plt
 from scipy import signal
 import io
 import base64
+import tempfile
+import os
 
 def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False):
     """
     Generate a comparison PSD plot with multiple traces
-
-    Parameters:
-    -----------
-    traces_config : list of dict
-        Each dict contains:
-        - file_bytes: bytes of the EDF file
-        - filename: str
-        - channel: str (channel name)
-        - label: str (legend label)
-        - time_start: float (optional, start time in seconds)
-        - time_end: float (optional, end time in seconds)
-        - color: str (optional, hex color code)
-
-    psd_params : dict
-        - method: 'welch' or 'periodogram'
-        - fmin: float (min frequency in Hz)
-        - fmax: float (max frequency in Hz)
-        - nperseg_seconds: float (window size in seconds, for Welch)
-        - noverlap_proportion: float (overlap proportion, for Welch)
-        - window: str (window type, for Welch)
-
-    use_resutil_style : bool
-        Whether to apply Optoceutics custom styling
-
-    Returns:
-    --------
-    str : JSON string with base64 encoded plot or error
+    Uses the same loading and processing methods as the existing PSD tool
     """
     try:
         # Apply resutil styling if requested
@@ -56,6 +32,14 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False):
             except Exception as e:
                 print(f"Failed to apply resutil styling: {e}")
 
+        # Extract PSD parameters
+        method = psd_params.get('method', 'welch')
+        fmin = psd_params.get('fmin', 0.5)
+        fmax = psd_params.get('fmax', 50)
+        nperseg_seconds = psd_params.get('nperseg_seconds', 4.0)
+        noverlap_proportion = psd_params.get('noverlap_proportion', 0.5)
+        window = psd_params.get('window', 'hamming')
+
         # Create figure
         fig, ax = plt.subplots(figsize=(12, 6))
 
@@ -66,38 +50,48 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False):
         # Process each trace
         for idx, trace in enumerate(traces_config):
             try:
-                # Load EDF file
                 file_bytes = trace['file_bytes']
                 filename = trace['filename']
                 channel = trace['channel']
                 label = trace['label']
 
-                # Import EDF reading library
+                print(f"Processing trace: {label} (file: {filename}, channel: {channel})")
+
+                # Write bytes to temporary file (same as existing code)
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.edf') as tmp_file:
+                    tmp_file.write(file_bytes)
+                    tmp_path = tmp_file.name
+
                 try:
-                    import mne
-                    # Create a file-like object from bytes
-                    from io import BytesIO
-                    file_obj = BytesIO(file_bytes)
-                    raw = mne.io.read_raw_edf(file_obj, preload=True, verbose=False)
-
-                    # Get channel data
-                    if channel not in raw.ch_names:
-                        print(f"Warning: Channel {channel} not found in {filename}, skipping")
-                        continue
-
-                    # Pick the channel
-                    raw_copy = raw.copy().pick_channels([channel])
-                    data = raw_copy.get_data()[0]  # Get first (and only) channel
-                    sfreq = raw_copy.info['sfreq']
-
-                except ImportError:
-                    # Fallback to pyedflib
+                    # Try to load with MNE (same as existing code)
                     try:
-                        import pyedflib
-                        from io import BytesIO
+                        import mne
+                        MNE_AVAILABLE = True
+                    except ImportError:
+                        MNE_AVAILABLE = False
 
-                        file_obj = BytesIO(file_bytes)
-                        f = pyedflib.EdfReader(file_obj)
+                    if MNE_AVAILABLE:
+                        try:
+                            # Try EDF first
+                            raw = mne.io.read_raw_edf(tmp_path, preload=True, verbose=False)
+                        except:
+                            # Try FIF if EDF fails
+                            raw = mne.io.read_raw_fif(tmp_path, preload=True, verbose=False)
+
+                        # Check if channel exists
+                        if channel not in raw.ch_names:
+                            print(f"Warning: Channel {channel} not found in {filename}, skipping")
+                            continue
+
+                        # Get channel data
+                        raw_copy = raw.copy().pick_channels([channel])
+                        data = raw_copy.get_data()[0]  # Get first (and only) channel
+                        sfreq = raw_copy.info['sfreq']
+
+                    else:
+                        # Fallback to pyedflib (same as existing code)
+                        import pyedflib
+                        f = pyedflib.EdfReader(tmp_path)
 
                         # Find channel index
                         channel_names = f.getSignalLabels()
@@ -111,11 +105,14 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False):
                         sfreq = f.getSampleFrequency(channel_idx)
                         f.close()
 
-                    except Exception as e:
-                        print(f"Error reading {filename} with pyedflib: {e}")
-                        continue
+                finally:
+                    # Clean up temporary file
+                    try:
+                        os.unlink(tmp_path)
+                    except:
+                        pass
 
-                # Apply time window if specified
+                # Apply time window if specified (same as existing code)
                 if 'time_start' in trace and 'time_end' in trace:
                     time_start = trace['time_start']
                     time_end = trace['time_end']
@@ -133,16 +130,10 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False):
                         data = data[start_sample:end_sample]
                         print(f"Applied time window {time_start}-{time_end}s to {label}")
 
-                # Calculate PSD
-                method = psd_params['method']
-                fmin = psd_params['fmin']
-                fmax = psd_params['fmax']
-
+                # Calculate PSD using the same method as existing PSD tool
                 if method == 'welch':
-                    nperseg = int(psd_params['nperseg_seconds'] * sfreq)
-                    noverlap = int(nperseg * psd_params['noverlap_proportion'])
-                    window = psd_params['window']
-
+                    nperseg = int(nperseg_seconds * sfreq)
+                    noverlap = int(noverlap_proportion * nperseg)
                     freqs, psd = signal.welch(
                         data,
                         fs=sfreq,
@@ -158,14 +149,11 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False):
                 freqs_filtered = freqs[freq_mask]
                 psd_filtered = psd[freq_mask]
 
-                # Convert to dB
-                psd_db = 10 * np.log10(psd_filtered)
-
                 # Get color
                 color = trace.get('color', default_colors[idx % len(default_colors)])
 
-                # Plot
-                ax.plot(freqs_filtered, psd_db, label=label, color=color, linewidth=2, alpha=0.8)
+                # Plot with log scale (same as existing PSD tool)
+                ax.semilogy(freqs_filtered, psd_filtered, label=label, color=color, linewidth=2, alpha=0.8)
 
                 print(f"✓ Plotted trace: {label}")
 
@@ -175,12 +163,13 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False):
                 traceback.print_exc()
                 continue
 
-        # Configure plot
+        # Configure plot (same as existing PSD tool)
         ax.set_xlabel('Frequency (Hz)', fontsize=12, fontweight='bold')
-        ax.set_ylabel('Power Spectral Density (dB/Hz)', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Power Spectral Density (V²/Hz)', fontsize=12, fontweight='bold')
         ax.set_title('PSD Comparison', fontsize=14, fontweight='bold')
         ax.grid(True, alpha=0.3)
         ax.legend(loc='best', fontsize=10, framealpha=0.9)
+        ax.set_xlim(fmin, fmax)
 
         # Tight layout
         plt.tight_layout()

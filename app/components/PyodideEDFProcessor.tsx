@@ -3147,8 +3147,29 @@ result_json
 
       if (parsedResult.success) {
         setCurrentComparisonPlot(parsedResult.plot_base64);
-        setSuccess(`Successfully generated comparison plot with ${comparisonTraces.length} traces`);
-        console.log('Comparison plot generated successfully');
+
+        // Add to analysis results so it can be included in reports
+        const comparisonResult: AnalysisResult = {
+          id: `comparison_${Date.now()}`,
+          analysis_type: 'PSD Comparison',
+          plot_base64: parsedResult.plot_base64,
+          success: true,
+          message: comparisonPlotName || `PSD Comparison (${comparisonTraces.length} traces)`,
+          parameters: { ...comparisonPsdParams },
+          data: {
+            traces: comparisonTraces.map(t => ({
+              label: t.label,
+              channel: t.channel,
+              fileId: t.fileId,
+              timeFrame: t.timeFrame
+            })),
+            trace_count: comparisonTraces.length
+          }
+        };
+
+        setAnalysisResults(prev => [...prev, comparisonResult]);
+        setSuccess(`Successfully generated comparison plot with ${comparisonTraces.length} traces. Added to analysis results.`);
+        console.log('Comparison plot generated successfully and added to analysis results');
       } else {
         setError(`Failed to generate comparison plot: ${parsedResult.error}`);
         console.error('Comparison plot error:', parsedResult.error);
