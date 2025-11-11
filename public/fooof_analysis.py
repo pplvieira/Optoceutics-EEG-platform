@@ -165,10 +165,10 @@ def create_fooof_plot(results_list, freq_range, show_aperiodic=True, show_period
     # Apply resutil styling if requested
     if use_resutil_style:
         try:
-            import resutil
-            resutil.set_oc_style()
-            resutil.set_oc_font()
-            print("Applied Optoceutics custom styling (resutil)")
+            from resutil import plotlib
+            plotlib.set_oc_style()
+            plotlib.set_oc_font()
+            print("Applied Optoceutics custom styling (resutil.plotlib)")
         except ImportError:
             print("Resutil not available, using default matplotlib styling")
         except Exception as e:

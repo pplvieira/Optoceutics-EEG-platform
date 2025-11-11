@@ -263,38 +263,29 @@ export default function PyodideEDFProcessor() {
       }
 
       // Install resutil for custom Optoceutics plot styling
-      // Use custom lightweight module to avoid dependency issues
+      // Use the full resutil library from local wheel
       try {
-        setLoadingMessage('Loading Optoceutics styling library...');
+        setLoadingMessage('Installing resutil (Optoceutics styling library)...');
+        const micropip = pyodide.pyimport("micropip");
 
-        // Fetch our custom resutil module
-        const resutilResponse = await fetch('/python-packages/resutil_oc.py');
-        if (!resutilResponse.ok) {
-          throw new Error(`Failed to fetch resutil_oc.py: ${resutilResponse.status}`);
-        }
-        const resutilCode = await resutilResponse.text();
+        // Install markdown dependency (required by resutil)
+        await micropip.install(['markdown']);
+        console.log('Markdown library installed');
 
-        // Load it into Python as 'resutil' module
+        // Install resutil from local wheel (includes fonts and style files)
+        await micropip.install('/pyodide-packages/resutil-0.4.0-py3-none-any.whl');
+
+        setLoadingMessage('Resutil library installed successfully');
+        console.log('Resutil library installed from local wheel');
+
+        // Import and verify it works
         await pyodide.runPythonAsync(`
-import sys
-from types import ModuleType
-
-# Create resutil module
-resutil = ModuleType('resutil')
-
-# Execute the code in the module's namespace
-exec('''${resutilCode.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}''', resutil.__dict__)
-
-# Add to sys.modules so it can be imported
-sys.modules['resutil'] = resutil
-
-print("✓ Optoceutics styling library (resutil) loaded successfully")
+import resutil
+from resutil import plotlib
+print("✓ Resutil (v0.4.0) loaded successfully with plotlib module")
 `);
-
-        setLoadingMessage('Optoceutics styling library loaded');
-        console.log('Custom resutil module loaded successfully');
       } catch (error) {
-        console.warn('Resutil loading failed (will use default matplotlib styling):', error);
+        console.warn('Resutil installation failed (will use default matplotlib styling):', error);
         setLoadingMessage('Using default matplotlib styling');
       }
 
@@ -1608,10 +1599,10 @@ def analyze_psd(edf_reader, parameters):
     # Apply resutil styling if requested
     if use_resutil_style:
         try:
-            import resutil
-            resutil.set_oc_style()
-            resutil.set_oc_font()
-            print("Applied Optoceutics custom styling to PSD plot (resutil)")
+            from resutil import plotlib
+            plotlib.set_oc_style()
+            plotlib.set_oc_font()
+            print("Applied Optoceutics custom styling to PSD plot (resutil.plotlib)")
         except ImportError:
             print("Resutil not available for PSD, using default matplotlib styling")
         except Exception as e:
