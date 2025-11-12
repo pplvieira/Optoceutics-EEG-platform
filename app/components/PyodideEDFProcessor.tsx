@@ -2384,6 +2384,39 @@ print("Python EDF analysis environment ready!")
     };
   }, [initializePyodide]);
 
+  // Reload file data into Python when active file changes
+  useEffect(() => {
+    if (!pyodideReady || !pyodideRef.current || !activeFileId) return;
+
+    const reloadActiveFile = async () => {
+      const activeFile = loadedFiles.find(f => f.id === activeFileId);
+      if (!activeFile) return;
+
+      try {
+        // Read file as bytes
+        const arrayBuffer = await activeFile.file.arrayBuffer();
+        const uint8Array = new Uint8Array(arrayBuffer);
+
+        // Set file data in Python globals
+        pyodideRef.current.globals.set('js_uint8_array', uint8Array);
+        pyodideRef.current.globals.set('filename', activeFile.file.name);
+
+        // Reload the file data into Python global variables
+        await pyodideRef.current.runPython(`
+          # Convert JavaScript Uint8Array to Python bytes
+          file_bytes = bytes(js_uint8_array)
+          read_edf_file(file_bytes, filename)
+        `);
+
+        console.log(`Reloaded file data into Python for: ${activeFile.file.name}`);
+      } catch (error) {
+        console.error('Error reloading file data into Python:', error);
+      }
+    };
+
+    reloadActiveFile();
+  }, [pyodideReady, activeFileId, loadedFiles]);
+
   const clearMessages = () => {
     setError(null);
     setSuccess(null);
