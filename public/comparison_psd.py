@@ -202,12 +202,17 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, 
                             for peak in peak_params:
                                 center_freq, power, bandwidth = peak
                                 if 8 <= center_freq <= 12:
+                                    # Find the actual PSD value at this frequency
+                                    freq_idx = np.argmin(np.abs(freqs - center_freq))
+                                    psd_value = psd[freq_idx]
+
                                     alpha_peak_info = {
                                         'frequency': float(center_freq),
                                         'power': float(power),
                                         'bandwidth': float(bandwidth),
                                         'label': label,
-                                        'color': trace.get('color', default_colors[idx % len(default_colors)])
+                                        'color': trace.get('color', default_colors[idx % len(default_colors)]),
+                                        'psd_value': float(psd_value)  # Store actual PSD value
                                     }
                                     print(f"  Found alpha peak at {center_freq:.1f} Hz for {label}")
                                     break  # Use first alpha peak found
@@ -245,6 +250,9 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, 
             if valid_peaks:
                 print(f"\nAdding alpha peak labels to plot ({len(valid_peaks)} peaks found)")
 
+                # Sort peaks by frequency (left to right ordering)
+                valid_peaks = sorted(valid_peaks, key=lambda p: p['frequency'])
+
                 # Get y-axis limits for positioning
                 ylim = ax.get_ylim()
                 y_range = ylim[1] - ylim[0]
@@ -261,9 +269,12 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, 
                 elif num_peaks == 3:
                     y_positions = [0.90, 0.78, 0.66]  # Three peaks staggered
                     x_offsets = [-3, 0, 3]  # Left, center, right
+                elif num_peaks == 4:
+                    y_positions = [0.90, 0.78, 0.66, 0.54]  # Four peaks well staggered
+                    x_offsets = [-3, 0, 3, -3]
                 else:
-                    # For 4+ peaks, distribute evenly between 65-90%
-                    y_positions = [0.90 - (i * 0.08) for i in range(num_peaks)]
+                    # For 5+ peaks, distribute evenly between 50-90%
+                    y_positions = [0.90 - (i * 0.09) for i in range(num_peaks)]
                     # Alternate left and right offsets
                     x_offsets = [(-3 if i % 2 == 0 else 3) for i in range(num_peaks)]
 
@@ -271,6 +282,7 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, 
                 for idx, peak_info in enumerate(valid_peaks):
                     freq = peak_info['frequency']
                     color = peak_info['color']
+                    psd_value = peak_info.get('psd_value')
 
                     # Get y-position for this label
                     y_fraction = y_positions[idx % len(y_positions)]
@@ -280,28 +292,31 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, 
                     x_offset = x_offsets[idx % len(x_offsets)]
                     label_x = freq + x_offset
 
-                    # Find the actual PSD value at this frequency for arrow placement
-                    # Place arrow at a reasonable point on the trace
-                    arrow_y = ylim[0] + (y_range * 0.3)  # Arrow points to 30% height
+                    # Point arrow to actual PSD value if available, otherwise use approximation
+                    if psd_value is not None:
+                        arrow_y = psd_value
+                    else:
+                        arrow_y = ylim[0] + (y_range * 0.3)
 
                     # Simplified text - just the alpha peak frequency
                     label_text = f'Alpha: {freq:.1f} Hz'
 
                     # Add text annotation with angled arrow, no box
+                    # Font size increased by 50%: 18-21pt (was 12-14pt)
                     ax.annotate(
                         label_text,
-                        xy=(freq, arrow_y),  # Arrow points to this location
+                        xy=(freq, arrow_y),  # Arrow points to actual peak location
                         xytext=(label_x, label_y),  # Text appears here (offset creates angle)
                         ha='center',
                         va='bottom',
-                        fontsize=14 if use_resutil_style else 12,  # 2x bigger
+                        fontsize=21 if use_resutil_style else 18,  # 50% larger, bold
                         color=color,
-                        fontweight='normal',
+                        fontweight='bold',  # Make font bold
                         arrowprops=dict(
                             arrowstyle='->',
                             color=color,
-                            linewidth=1.0,
-                            alpha=0.7,
+                            linewidth=1.2,
+                            alpha=0.8,
                             shrinkA=0,
                             shrinkB=5
                         )
