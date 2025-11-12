@@ -360,14 +360,16 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, 
                     y_positions = [0.90, 0.90]  # Both at same height, raised higher (side by side)
                     x_offsets = [-3, 3]  # Left and right with ±3 Hz spacing
                 elif num_peaks == 3:
-                    y_positions = [0.95, 0.60, 0.60]  # Top stands out on top, bottom 2 side-by-side
-                    x_offsets = [0, -3, 3]  # Middle, left, right with ±3 Hz spacing
+                    y_positions = [0.80, 0.97, 0.80]  # Top stands out on top, bottom 2 side-by-side
+                    x_offsets = [-3, 0, 3]  # Middle, left, right with ±3 Hz spacing
                 elif num_peaks == 4:
-                    y_positions = [0.95, 0.68, 0.41, 0.14]  # Four peaks with 27% gaps
-                    x_offsets = [-5, 0, 5, -5]
+                    # y_positions = [0.95, 0.68, 0.41, 0.14]  # Four peaks with 27% gaps
+                    # x_offsets = [-5, 0, 5, -5]
+                    y_positions = [0.95, 0.80, 0.95, 0.80]  # Four peaks with 27% gaps
+                    x_offsets = [-6, -2, 2, 6]
                 elif num_peaks == 5:
-                    y_positions = [0.95, 0.72, 0.49, 0.26, 0.08]  # Five peaks with ~23% gaps
-                    x_offsets = [-5, 0, 5, -5, 0]
+                    y_positions = [0.95, 0.80, 0.95, 0.80] # [0.95, 0.72, 0.49, 0.26, 0.08]  # Five peaks with ~23% gaps
+                    x_offsets = [-8, -4, 0, 4, 8]
                 else:
                     # For 6+ peaks, distribute evenly between 08-95% with even spacing
                     spacing = 0.87 / (num_peaks - 1)  # Distribute across 87% of height
