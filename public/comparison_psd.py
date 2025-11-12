@@ -258,23 +258,27 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, 
                 y_range = ylim[1] - ylim[0]
 
                 # Define vertical positions for labels to avoid overlap
-                # Distribute labels across different heights
+                # Distribute labels across different heights with large spacing
                 num_peaks = len(valid_peaks)
                 if num_peaks == 1:
                     y_positions = [0.85]  # Single peak at 85%
                     x_offsets = [0]  # No horizontal offset for single peak
                 elif num_peaks == 2:
-                    y_positions = [0.90, 0.75]  # Two peaks staggered
+                    y_positions = [0.92, 0.68]  # Two peaks with 24% gap
                     x_offsets = [-2, 2]  # Offset left and right
                 elif num_peaks == 3:
-                    y_positions = [0.90, 0.78, 0.66]  # Three peaks staggered
+                    y_positions = [0.92, 0.72, 0.52]  # Three peaks with 20% gaps
                     x_offsets = [-3, 0, 3]  # Left, center, right
                 elif num_peaks == 4:
-                    y_positions = [0.90, 0.78, 0.66, 0.54]  # Four peaks well staggered
+                    y_positions = [0.92, 0.74, 0.56, 0.38]  # Four peaks with 18% gaps
                     x_offsets = [-3, 0, 3, -3]
+                elif num_peaks == 5:
+                    y_positions = [0.92, 0.77, 0.62, 0.47, 0.32]  # Five peaks with 15% gaps
+                    x_offsets = [-3, 0, 3, -3, 0]
                 else:
-                    # For 5+ peaks, distribute evenly between 50-90%
-                    y_positions = [0.90 - (i * 0.09) for i in range(num_peaks)]
+                    # For 6+ peaks, distribute evenly between 30-92% with even spacing
+                    spacing = 0.62 / (num_peaks - 1)  # Distribute across 62% of height
+                    y_positions = [0.92 - (i * spacing) for i in range(num_peaks)]
                     # Alternate left and right offsets
                     x_offsets = [(-3 if i % 2 == 0 else 3) for i in range(num_peaks)]
 
@@ -302,14 +306,14 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, 
                     label_text = f'Alpha: {freq:.1f} Hz'
 
                     # Add text annotation with angled arrow, no box
-                    # Font size increased by 50%: 18-21pt (was 12-14pt)
+                    # Font size: 14-17pt (20% smaller than previous 18-21pt)
                     ax.annotate(
                         label_text,
                         xy=(freq, arrow_y),  # Arrow points to actual peak location
                         xytext=(label_x, label_y),  # Text appears here (offset creates angle)
                         ha='center',
                         va='bottom',
-                        fontsize=21 if use_resutil_style else 18,  # 50% larger, bold
+                        fontsize=17 if use_resutil_style else 14,  # 20% smaller, bold
                         color=color,
                         fontweight='bold',  # Make font bold
                         arrowprops=dict(
