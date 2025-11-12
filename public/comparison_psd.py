@@ -357,11 +357,11 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, 
                     y_positions = [0.85]  # Single peak at 85%
                     x_offsets = [0]  # No horizontal offset for single peak
                 elif num_peaks == 2:
-                    y_positions = [0.70, 0.70]  # Both at same height (side by side)
-                    x_offsets = [-7, 7]  # Left and right with good spacing
+                    y_positions = [0.90, 0.90]  # Both at same height, raised higher (side by side)
+                    x_offsets = [-3, 3]  # Left and right with ±3 Hz spacing
                 elif num_peaks == 3:
-                    y_positions = [0.90, 0.60, 0.60]  # Top middle, bottom left, bottom right
-                    x_offsets = [0, -7, 7]  # Middle, left, right
+                    y_positions = [0.95, 0.60, 0.60]  # Top stands out on top, bottom 2 side-by-side
+                    x_offsets = [0, -3, 3]  # Middle, left, right with ±3 Hz spacing
                 elif num_peaks == 4:
                     y_positions = [0.95, 0.68, 0.41, 0.14]  # Four peaks with 27% gaps
                     x_offsets = [-5, 0, 5, -5]
@@ -454,21 +454,27 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, 
                 y_range = ylim[1] - ylim[0]
 
                 # Position gamma labels side-by-side at the same height
-                # Place them lower to avoid legend overlap
+                # Place them lower to avoid legend overlap, centered symmetrically around 40 Hz
                 num_gamma = len(sorted_gamma)
+                y_positions_gamma = [0.25] * num_gamma  # All at same height
+
+                # Calculate x_offsets centered symmetrically around 0 (which means centered at peak freq ~40Hz)
                 if num_gamma == 1:
-                    y_positions_gamma = [0.25]
-                    x_offsets_gamma = [5]
+                    x_offsets_gamma = [0]
                 elif num_gamma == 2:
-                    y_positions_gamma = [0.25, 0.25]  # Same height, side by side
-                    x_offsets_gamma = [2, 8]  # Left and right with spacing
+                    x_offsets_gamma = [-3, 3]  # ±3 Hz spacing
                 elif num_gamma == 3:
-                    y_positions_gamma = [0.25, 0.25, 0.25]  # All at same height
-                    x_offsets_gamma = [0, 5, 10]  # Left, middle, right with spacing
+                    x_offsets_gamma = [-5, 0, 5]  # Centered with 5 Hz spacing
                 else:
-                    # For 4+ gamma peaks, place side by side with even spacing
-                    y_positions_gamma = [0.25] * num_gamma
-                    x_offsets_gamma = [i * 5 for i in range(num_gamma)]  # Even horizontal spacing
+                    # For 4+ peaks, distribute symmetrically
+                    spacing = 3  # Hz spacing between labels
+                    if num_gamma % 2 == 0:  # even number
+                        # e.g., 4 peaks: [-4.5, -1.5, 1.5, 4.5] or [-3, -1, 1, 3] with spacing=2
+                        x_offsets_gamma = [(i - num_gamma/2 + 0.5) * spacing for i in range(num_gamma)]
+                    else:  # odd number
+                        # e.g., 5 peaks: [-6, -3, 0, 3, 6] with spacing=3
+                        half = num_gamma // 2
+                        x_offsets_gamma = [-(half - i) * spacing for i in range(half)] + [0] + [(i + 1) * spacing for i in range(half)]
 
                 # Add labels for each gamma peak
                 for idx, (orig_idx, gamma_item) in enumerate(sorted_gamma):
