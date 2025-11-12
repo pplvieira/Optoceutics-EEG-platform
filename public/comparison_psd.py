@@ -360,22 +360,24 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, 
                     y_positions = [0.90, 0.90]  # Both at same height, raised higher (side by side)
                     x_offsets = [-3, 3]  # Left and right with ±3 Hz spacing
                 elif num_peaks == 3:
-                    y_positions = [0.80, 0.97, 0.80]  # Top stands out on top, bottom 2 side-by-side
+                    y_positions = [0.88, 0.97, 0.88]  # Top stands out on top, bottom 2 side-by-side
                     x_offsets = [-3, 0, 3]  # Middle, left, right with ±3 Hz spacing
                 elif num_peaks == 4:
                     # y_positions = [0.95, 0.68, 0.41, 0.14]  # Four peaks with 27% gaps
                     # x_offsets = [-5, 0, 5, -5]
-                    y_positions = [0.95, 0.80, 0.95, 0.80]  # Four peaks with 27% gaps
+                    y_positions = [0.95, 0.88, 0.95, 0.88]  # Four peaks with 27% gaps
                     x_offsets = [-6, -2, 2, 6]
                 elif num_peaks == 5:
-                    y_positions = [0.95, 0.80, 0.95, 0.80] # [0.95, 0.72, 0.49, 0.26, 0.08]  # Five peaks with ~23% gaps
+                    y_positions = [0.95, 0.88, 0.95, 0.88] # [0.95, 0.72, 0.49, 0.26, 0.08]  # Five peaks with ~23% gaps
                     x_offsets = [-8, -4, 0, 4, 8]
                 else:
                     # For 6+ peaks, distribute evenly between 08-95% with even spacing
                     spacing = 0.87 / (num_peaks - 1)  # Distribute across 87% of height
-                    y_positions = [0.95 - (i * spacing) for i in range(num_peaks)]
+                    # y_positions = [0.95 - (i * spacing) for i in range(num_peaks)]
+                    y_positions = [0.87 + 0.09 (i % 2) for i in range(num_peaks)] #new
                     # Alternate left and right offsets
-                    x_offsets = [(-5 if i % 2 == 0 else 5) for i in range(num_peaks)]
+                    # x_offsets = [(-5 if i % 2 == 0 else 5) for i in range(num_peaks)]
+                    x_offsets = [(5*( i - (num_peaks-1)/2 ) for i in range(num_peaks)] # NEW
 
                 # Add labels for each trace with alpha peak
                 for idx, peak_info in enumerate(valid_peaks):
@@ -458,7 +460,8 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, 
                 # Position gamma labels side-by-side at the same height
                 # Place them lower to avoid legend overlap, centered symmetrically around 40 Hz
                 num_gamma = len(sorted_gamma)
-                y_positions_gamma = [0.25] * num_gamma  # All at same height
+                # y_positions_gamma = [0.25] * num_gamma  # All at same height # OLD
+                y_positions_gamma = [0.65] * num_gamma  # All at same height
 
                 # Calculate x_offsets centered symmetrically around 0 (which means centered at peak freq ~40Hz)
                 if num_gamma == 1:
