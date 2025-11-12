@@ -351,29 +351,29 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, 
                 y_range = ylim[1] - ylim[0]
 
                 # Define vertical positions for labels to avoid overlap
-                # Distribute labels across different heights with very large spacing
+                # For 2-3 peaks, place side-by-side; otherwise stack vertically
                 num_peaks = len(valid_peaks)
                 if num_peaks == 1:
                     y_positions = [0.85]  # Single peak at 85%
                     x_offsets = [0]  # No horizontal offset for single peak
                 elif num_peaks == 2:
-                    y_positions = [0.95, 0.50]  # Two peaks with 45% gap (increased from 37%)
-                    x_offsets = [-4, 4]  # Offset left and right (increased from [-2, 2])
+                    y_positions = [0.70, 0.70]  # Both at same height (side by side)
+                    x_offsets = [-7, 7]  # Left and right with good spacing
                 elif num_peaks == 3:
-                    y_positions = [0.95, 0.63, 0.31]  # Three peaks with 32% gaps (increased)
-                    x_offsets = [-5, 0, 5]  # Left, center, right (increased from [-3, 0, 3])
+                    y_positions = [0.90, 0.60, 0.60]  # Top middle, bottom left, bottom right
+                    x_offsets = [0, -7, 7]  # Middle, left, right
                 elif num_peaks == 4:
-                    y_positions = [0.95, 0.68, 0.41, 0.14]  # Four peaks with 27% gaps (increased)
-                    x_offsets = [-5, 0, 5, -5]  # (increased from [-3, 0, 3, -3])
+                    y_positions = [0.95, 0.68, 0.41, 0.14]  # Four peaks with 27% gaps
+                    x_offsets = [-5, 0, 5, -5]
                 elif num_peaks == 5:
-                    y_positions = [0.95, 0.72, 0.49, 0.26, 0.08]  # Five peaks with ~23% gaps (increased)
-                    x_offsets = [-5, 0, 5, -5, 0]  # (increased from [-3, 0, 3, -3, 0])
+                    y_positions = [0.95, 0.72, 0.49, 0.26, 0.08]  # Five peaks with ~23% gaps
+                    x_offsets = [-5, 0, 5, -5, 0]
                 else:
                     # For 6+ peaks, distribute evenly between 08-95% with even spacing
-                    spacing = 0.87 / (num_peaks - 1)  # Distribute across 87% of height (increased from 80%)
+                    spacing = 0.87 / (num_peaks - 1)  # Distribute across 87% of height
                     y_positions = [0.95 - (i * spacing) for i in range(num_peaks)]
                     # Alternate left and right offsets
-                    x_offsets = [(-5 if i % 2 == 0 else 5) for i in range(num_peaks)]  # (increased from [-3, 3])
+                    x_offsets = [(-5 if i % 2 == 0 else 5) for i in range(num_peaks)]
 
                 # Add labels for each trace with alpha peak
                 for idx, peak_info in enumerate(valid_peaks):
@@ -402,14 +402,14 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, 
                     label_text = f'Alpha: {freq:.1f} Hz\nPwr: {power:.2f}\nBW: {bandwidth:.1f} Hz'
 
                     # Add text annotation with angled arrow, no box
-                    # Font size: 12-14pt (15% smaller than previous 14-17pt)
+                    # Font size: 11-13pt (10% smaller than previous 12-14pt)
                     ax.annotate(
                         label_text,
                         xy=(freq, arrow_y),  # Arrow points to actual peak location
                         xytext=(label_x, label_y),  # Text appears here (offset creates angle)
                         ha='center',
                         va='bottom',
-                        fontsize=14 if use_resutil_style else 12,  # 15% smaller
+                        fontsize=13 if use_resutil_style else 11,  # 10% smaller
                         color=color,
                         fontweight='semibold',  # Less bold than 'bold'
                         arrowprops=dict(
@@ -453,22 +453,22 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, 
                 ylim = ax.get_ylim()
                 y_range = ylim[1] - ylim[0]
 
-                # Position gamma labels on the right side (different from alpha)
-                # Place them much lower to avoid legend overlap
+                # Position gamma labels side-by-side at the same height
+                # Place them lower to avoid legend overlap
                 num_gamma = len(sorted_gamma)
                 if num_gamma == 1:
-                    y_positions_gamma = [0.30]
+                    y_positions_gamma = [0.25]
                     x_offsets_gamma = [5]
                 elif num_gamma == 2:
-                    y_positions_gamma = [0.35, 0.15]
-                    x_offsets_gamma = [5, 5]
+                    y_positions_gamma = [0.25, 0.25]  # Same height, side by side
+                    x_offsets_gamma = [2, 8]  # Left and right with spacing
                 elif num_gamma == 3:
-                    y_positions_gamma = [0.40, 0.25, 0.10]
-                    x_offsets_gamma = [5, 5, 5]
+                    y_positions_gamma = [0.25, 0.25, 0.25]  # All at same height
+                    x_offsets_gamma = [0, 5, 10]  # Left, middle, right with spacing
                 else:
-                    spacing = 0.35 / (num_gamma - 1) if num_gamma > 1 else 0
-                    y_positions_gamma = [0.40 - (i * spacing) for i in range(num_gamma)]
-                    x_offsets_gamma = [5] * num_gamma
+                    # For 4+ gamma peaks, place side by side with even spacing
+                    y_positions_gamma = [0.25] * num_gamma
+                    x_offsets_gamma = [i * 5 for i in range(num_gamma)]  # Even horizontal spacing
 
                 # Add labels for each gamma peak
                 for idx, (orig_idx, gamma_item) in enumerate(sorted_gamma):
@@ -499,11 +499,11 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, 
                         else:
                             arrow_y = ylim[0] + (y_range * 0.3)
 
-                        # Build label text
+                        # Build label text (without frequency line)
                         if show_snr_40hz and snr is not None:
-                            label_text = f'γ: {freq:.1f} Hz\nPwr: {power:.2f}\nBW: {bandwidth:.1f}\nSNR: {snr:.1f}'
+                            label_text = f'Pwr: {power:.2f}\nBW: {bandwidth:.1f}\nSNR: {snr:.1f}'
                         else:
-                            label_text = f'γ: {freq:.1f} Hz\nPwr: {power:.2f}\nBW: {bandwidth:.1f} Hz'
+                            label_text = f'Pwr: {power:.2f}\nBW: {bandwidth:.1f} Hz'
 
                         ax.annotate(
                             label_text,
@@ -511,7 +511,7 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, 
                             xytext=(label_x, label_y),
                             ha='center',
                             va='bottom',
-                            fontsize=14 if use_resutil_style else 12,
+                            fontsize=13 if use_resutil_style else 11,  # 10% smaller
                             color=color,
                             fontweight='semibold',
                             arrowprops=dict(
@@ -533,7 +533,7 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, 
                         ax.text(
                             label_x, label_y_pos, label_text,
                             ha='center', va='bottom',
-                            fontsize=14 if use_resutil_style else 12,
+                            fontsize=13 if use_resutil_style else 11,  # 10% smaller
                             color=color,
                             fontweight='semibold'
                         )
