@@ -22,7 +22,7 @@ try:
 except ImportError:
     print("FOOOF not available - alpha peak detection will be disabled")
 
-def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, show_alpha_peaks=False):
+def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, show_alpha_peaks=False, hide_title=False):
     """
     Generate a comparison PSD plot with multiple traces
     Uses the same loading and processing methods as the existing PSD tool
@@ -196,26 +196,37 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, 
 
                         fm.fit(freqs_fooof, psd_fooof)
 
-                        # Extract alpha peaks (8-12 Hz)
+                        # Extract alpha peaks (8-12 Hz) and select the one with highest power
                         peak_params = fm.peak_params_
+                        alpha_peaks_in_range = []
                         if len(peak_params) > 0:
                             for peak in peak_params:
                                 center_freq, power, bandwidth = peak
                                 if 8 <= center_freq <= 12:
-                                    # Find the actual PSD value at this frequency
-                                    freq_idx = np.argmin(np.abs(freqs - center_freq))
-                                    psd_value = psd[freq_idx]
+                                    alpha_peaks_in_range.append(peak)
 
-                                    alpha_peak_info = {
-                                        'frequency': float(center_freq),
-                                        'power': float(power),
-                                        'bandwidth': float(bandwidth),
-                                        'label': label,
-                                        'color': trace.get('color', default_colors[idx % len(default_colors)]),
-                                        'psd_value': float(psd_value)  # Store actual PSD value
-                                    }
+                            # Select alpha peak with highest power
+                            if alpha_peaks_in_range:
+                                best_peak = max(alpha_peaks_in_range, key=lambda p: p[1])  # p[1] is power
+                                center_freq, power, bandwidth = best_peak
+
+                                # Find the actual PSD value at this frequency
+                                freq_idx = np.argmin(np.abs(freqs - center_freq))
+                                psd_value = psd[freq_idx]
+
+                                alpha_peak_info = {
+                                    'frequency': float(center_freq),
+                                    'power': float(power),
+                                    'bandwidth': float(bandwidth),
+                                    'label': label,
+                                    'color': trace.get('color', default_colors[idx % len(default_colors)]),
+                                    'psd_value': float(psd_value)  # Store actual PSD value
+                                }
+
+                                if len(alpha_peaks_in_range) > 1:
+                                    print(f"  Found {len(alpha_peaks_in_range)} alpha peaks, selected highest power at {center_freq:.1f} Hz for {label}")
+                                else:
                                     print(f"  Found alpha peak at {center_freq:.1f} Hz for {label}")
-                                    break  # Use first alpha peak found
                     except Exception as e:
                         print(f"  Warning: FOOOF analysis failed for {label}: {e}")
 
@@ -337,13 +348,15 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, 
         if use_resutil_style:
             ax.set_xlabel('Frequency (Hz)')
             ax.set_ylabel('Power Spectral Density (V²/Hz)')
-            ax.set_title('PSD Comparison')
+            if not hide_title:
+                ax.set_title('PSD Comparison')
             # Grid is already set by resutil style
             ax.legend(loc='best')
         else:
             ax.set_xlabel('Frequency (Hz)', fontsize=12, fontweight='bold')
             ax.set_ylabel('Power Spectral Density (V²/Hz)', fontsize=12, fontweight='bold')
-            ax.set_title('PSD Comparison', fontsize=14, fontweight='bold')
+            if not hide_title:
+                ax.set_title('PSD Comparison', fontsize=14, fontweight='bold')
             ax.grid(True, alpha=0.3)
             ax.legend(loc='best', fontsize=10, framealpha=0.9)
 

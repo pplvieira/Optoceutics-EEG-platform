@@ -166,6 +166,9 @@ export default function PyodideEDFProcessor() {
   // Alpha peaks toggle for comparison plots
   const [showAlphaPeaks, setShowAlphaPeaks] = useState(false);
 
+  // Hide title toggle for comparison plots
+  const [hideComparisonTitle, setHideComparisonTitle] = useState(false);
+
   // Comparison mode state
   const [comparisonMode, setComparisonMode] = useState<boolean>(false);
   const [comparisonTraces, setComparisonTraces] = useState<ComparisonTrace[]>([]);
@@ -3098,6 +3101,7 @@ export_modified_edf()
       pyodideRef.current.globals.set('comparison_psd_params', comparisonPsdParams);
       pyodideRef.current.globals.set('use_resutil_style', useResutilStyle);
       pyodideRef.current.globals.set('show_alpha_peaks', showAlphaPeaks);
+      pyodideRef.current.globals.set('hide_comparison_title', hideComparisonTitle);
 
       // Build traces config in Python by converting bytes and merging with metadata
       const result = await pyodideRef.current.runPythonAsync(`
@@ -3142,7 +3146,8 @@ result_json = generate_comparison_psd(
     traces_config,
     comparison_psd_params_py,
     use_resutil_style,
-    show_alpha_peaks
+    show_alpha_peaks,
+    hide_comparison_title
 )
 
 result_json
@@ -3196,7 +3201,8 @@ result_json
     loadedFiles,
     comparisonPsdParams,
     useResutilStyle,
-    showAlphaPeaks
+    showAlphaPeaks,
+    hideComparisonTitle
   ]);
 
   const runSSVEPAnalysis = async () => {
@@ -4475,6 +4481,24 @@ result_json
                         </label>
                         <p className="text-xs text-gray-500 ml-6 mt-1">
                           Compute and display alpha peak (8-12 Hz) frequencies using FOOOF analysis
+                        </p>
+                      </div>
+
+                      {/* Hide title toggle */}
+                      <div className="md:col-span-3">
+                        <label className="flex items-center space-x-2">
+                          <input
+                            type="checkbox"
+                            checked={hideComparisonTitle}
+                            onChange={(e) => setHideComparisonTitle(e.target.checked)}
+                            className="rounded text-gray-600 focus:ring-gray-500"
+                          />
+                          <span className="text-sm font-medium text-gray-700">
+                            Hide plot title
+                          </span>
+                        </label>
+                        <p className="text-xs text-gray-500 ml-6 mt-1">
+                          Remove the title from the comparison plot
                         </p>
                       </div>
                     </div>
