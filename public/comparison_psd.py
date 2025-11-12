@@ -22,7 +22,7 @@ try:
 except ImportError:
     print("FOOOF not available - alpha peak detection will be disabled")
 
-def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, show_alpha_peaks=False, hide_title=False):
+def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, show_alpha_peaks=False, hide_title=False, use_db_scale=False, show_gamma_peaks=False, show_snr_40hz=False):
     """
     Generate a comparison PSD plot with multiple traces
     Uses the same loading and processing methods as the existing PSD tool
@@ -78,6 +78,9 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, 
 
         # Store alpha peak information for each trace
         trace_alpha_peaks = []
+
+        # Store gamma peak information for each trace
+        trace_gamma_peaks = []
 
         # Process each trace
         for idx, trace in enumerate(traces_config):
@@ -233,17 +236,96 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, 
                 # Store alpha peak info
                 trace_alpha_peaks.append(alpha_peak_info)
 
+                # Compute gamma peaks (40Hz SSVEP) using FOOOF if requested
+                gamma_peak_info = None
+                if show_gamma_peaks and FOOOF_AVAILABLE:
+                    try:
+                        # Run FOOOF to detect gamma peaks (38-42 Hz)
+                        fm_gamma = FOOOF(
+                            peak_width_limits=[0.5, 12],
+                            max_n_peaks=6,
+                            min_peak_height=0.1,
+                            aperiodic_mode='fixed',
+                            verbose=False
+                        )
+
+                        # Fit FOOOF model on full frequency range
+                        fooof_freq_mask_gamma = (freqs >= 1) & (freqs <= 50)
+                        freqs_fooof_gamma = freqs[fooof_freq_mask_gamma]
+                        psd_fooof_gamma = psd[fooof_freq_mask_gamma]
+
+                        fm_gamma.fit(freqs_fooof_gamma, psd_fooof_gamma)
+
+                        # Extract gamma peaks (38-42 Hz) and select the one with highest power
+                        peak_params_gamma = fm_gamma.peak_params_
+                        gamma_peaks_in_range = []
+                        if len(peak_params_gamma) > 0:
+                            for peak in peak_params_gamma:
+                                center_freq, power, bandwidth = peak
+                                if 38 <= center_freq <= 42:
+                                    gamma_peaks_in_range.append(peak)
+
+                            # Select gamma peak with highest power
+                            if gamma_peaks_in_range:
+                                best_gamma_peak = max(gamma_peaks_in_range, key=lambda p: p[1])
+                                center_freq, power, bandwidth = best_gamma_peak
+
+                                # Find the actual PSD value at this frequency
+                                freq_idx = np.argmin(np.abs(freqs - center_freq))
+                                psd_value = psd[freq_idx]
+
+                                # Calculate SNR at 40Hz if requested
+                                snr_40hz = None
+                                if show_snr_40hz:
+                                    # SNR = peak power / average power at 1-2 Hz away
+                                    freq_1hz_away = ((freqs >= (center_freq - 2)) & (freqs <= (center_freq - 1))) | ((freqs >= (center_freq + 1)) & (freqs <= (center_freq + 2)))
+                                    if np.any(freq_1hz_away):
+                                        avg_power_away = np.mean(psd[freq_1hz_away])
+                                        if avg_power_away > 0:
+                                            snr_40hz = psd_value / avg_power_away
+
+                                gamma_peak_info = {
+                                    'frequency': float(center_freq),
+                                    'power': float(power),
+                                    'bandwidth': float(bandwidth),
+                                    'label': label,
+                                    'color': trace.get('color', default_colors[idx % len(default_colors)]),
+                                    'psd_value': float(psd_value),
+                                    'snr': float(snr_40hz) if snr_40hz is not None else None
+                                }
+
+                                if len(gamma_peaks_in_range) > 1:
+                                    print(f"  Found {len(gamma_peaks_in_range)} gamma peaks, selected highest power at {center_freq:.1f} Hz for {label}")
+                                else:
+                                    print(f"  Found gamma peak at {center_freq:.1f} Hz for {label}")
+                    except Exception as e:
+                        print(f"  Warning: FOOOF gamma analysis failed for {label}: {e}")
+
+                # Store gamma peak info
+                trace_gamma_peaks.append(gamma_peak_info)
+
                 # Get color - use custom color if specified, otherwise use palette
                 color = trace.get('color', default_colors[idx % len(default_colors)])
 
-                # Plot with log scale
-                # When resutil styling is enabled, let it control linewidth
-                if use_resutil_style:
-                    # Use style defaults for linewidth, let resutil control it
-                    ax.semilogy(freqs_filtered, psd_filtered, label=label, color=color)
+                # Convert to dB if requested
+                if use_db_scale:
+                    psd_to_plot = 10 * np.log10(psd_filtered)
                 else:
-                    # Use explicit styling for non-resutil mode
-                    ax.semilogy(freqs_filtered, psd_filtered, label=label, color=color, linewidth=2, alpha=0.8)
+                    psd_to_plot = psd_filtered
+
+                # Plot with appropriate scale
+                if use_db_scale:
+                    # Linear scale for dB
+                    if use_resutil_style:
+                        ax.plot(freqs_filtered, psd_to_plot, label=label, color=color)
+                    else:
+                        ax.plot(freqs_filtered, psd_to_plot, label=label, color=color, linewidth=2, alpha=0.8)
+                else:
+                    # Log scale for power
+                    if use_resutil_style:
+                        ax.semilogy(freqs_filtered, psd_to_plot, label=label, color=color)
+                    else:
+                        ax.semilogy(freqs_filtered, psd_to_plot, label=label, color=color, linewidth=2, alpha=0.8)
 
                 print(f"✓ Plotted trace: {label}")
 
@@ -313,8 +395,10 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, 
                     else:
                         arrow_y = ylim[0] + (y_range * 0.3)
 
-                    # Simplified text - just the alpha peak frequency
-                    label_text = f'Alpha: {freq:.1f} Hz'
+                    # Enhanced label with frequency, power, and bandwidth
+                    power = peak_info.get('power', 0)
+                    bandwidth = peak_info.get('bandwidth', 0)
+                    label_text = f'Alpha: {freq:.1f} Hz\nPwr: {power:.2f}\nBW: {bandwidth:.1f} Hz'
 
                     # Add text annotation with angled arrow, no box
                     # Font size: 12-14pt (15% smaller than previous 14-17pt)
@@ -343,18 +427,133 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, 
             elif show_alpha_peaks and not FOOOF_AVAILABLE:
                 print("  Warning: FOOOF not available - cannot compute alpha peaks")
 
+        # Add gamma peak (40Hz) labels if computed
+        if show_gamma_peaks:
+            # Collect gamma peaks (can be None)
+            valid_gamma_peaks = []
+            for idx, peak in enumerate(trace_gamma_peaks):
+                trace = traces_config[idx] if idx < len(traces_config) else {}
+                valid_gamma_peaks.append({
+                    'peak': peak,
+                    'trace_label': trace.get('label', f'Trace {idx+1}'),
+                    'color': trace.get('color', default_colors[idx % len(default_colors)])
+                })
+
+            if valid_gamma_peaks:
+                print(f"\nAdding gamma (40Hz) peak labels to plot")
+
+                # Sort by frequency if peaks exist, otherwise maintain order
+                gamma_with_peaks = [(i, vp) for i, vp in enumerate(valid_gamma_peaks) if vp['peak'] is not None]
+                gamma_without_peaks = [(i, vp) for i, vp in enumerate(valid_gamma_peaks) if vp['peak'] is None]
+
+                sorted_gamma = sorted(gamma_with_peaks, key=lambda x: x[1]['peak']['frequency']) + gamma_without_peaks
+
+                # Get y-axis limits
+                ylim = ax.get_ylim()
+                y_range = ylim[1] - ylim[0]
+
+                # Position gamma labels on the right side (different from alpha)
+                num_gamma = len(sorted_gamma)
+                if num_gamma == 1:
+                    y_positions_gamma = [0.50]
+                    x_offsets_gamma = [4]
+                elif num_gamma == 2:
+                    y_positions_gamma = [0.60, 0.35]
+                    x_offsets_gamma = [4, 4]
+                elif num_gamma == 3:
+                    y_positions_gamma = [0.65, 0.45, 0.25]
+                    x_offsets_gamma = [4, 4, 4]
+                else:
+                    spacing = 0.50 / (num_gamma - 1) if num_gamma > 1 else 0
+                    y_positions_gamma = [0.65 - (i * spacing) for i in range(num_gamma)]
+                    x_offsets_gamma = [4] * num_gamma
+
+                # Add labels for each gamma peak
+                for idx, (orig_idx, gamma_item) in enumerate(sorted_gamma):
+                    peak = gamma_item['peak']
+                    color = gamma_item['color']
+                    trace_label = gamma_item['trace_label']
+
+                    # Get y-position for this label
+                    y_fraction = y_positions_gamma[idx % len(y_positions_gamma)]
+                    label_y = ylim[0] + (y_range * y_fraction)
+
+                    # Get x-offset (on the right side)
+                    x_offset = x_offsets_gamma[idx % len(x_offsets_gamma)]
+
+                    if peak is not None:
+                        freq = peak['frequency']
+                        power = peak.get('power', 0)
+                        bandwidth = peak.get('bandwidth', 0)
+                        psd_value = peak.get('psd_value')
+                        snr = peak.get('snr')
+
+                        label_x = freq + x_offset
+
+                        # Point arrow to actual PSD value
+                        if psd_value is not None:
+                            arrow_y = psd_value
+                        else:
+                            arrow_y = ylim[0] + (y_range * 0.3)
+
+                        # Build label text
+                        if show_snr_40hz and snr is not None:
+                            label_text = f'γ: {freq:.1f} Hz\nPwr: {power:.2f}\nBW: {bandwidth:.1f}\nSNR: {snr:.1f}'
+                        else:
+                            label_text = f'γ: {freq:.1f} Hz\nPwr: {power:.2f}\nBW: {bandwidth:.1f} Hz'
+
+                        ax.annotate(
+                            label_text,
+                            xy=(freq, arrow_y),
+                            xytext=(label_x, label_y),
+                            ha='center',
+                            va='bottom',
+                            fontsize=14 if use_resutil_style else 12,
+                            color=color,
+                            fontweight='semibold',
+                            arrowprops=dict(
+                                arrowstyle='->',
+                                color=color,
+                                linewidth=1.2,
+                                alpha=0.8,
+                                shrinkA=0,
+                                shrinkB=5
+                            )
+                        )
+                    else:
+                        # No peak found, show "--"
+                        label_x = 40 + x_offset  # Position at 40 Hz
+                        label_y_pos = ylim[0] + (y_range * y_fraction)
+
+                        label_text = f'{trace_label}\nγ: --'
+
+                        ax.text(
+                            label_x, label_y_pos, label_text,
+                            ha='center', va='bottom',
+                            fontsize=14 if use_resutil_style else 12,
+                            color=color,
+                            fontweight='semibold'
+                        )
+
+                print(f"✓ Added gamma peak labels for {len(valid_gamma_peaks)} traces")
+            elif show_gamma_peaks and not FOOOF_AVAILABLE:
+                print("  Warning: FOOOF not available - cannot compute gamma peaks")
+
         # Configure plot
+        # Determine ylabel based on scale
+        ylabel = 'PSD [dB]' if use_db_scale else 'Power Spectral Density (V²/Hz)'
+
         # When resutil styling is enabled, let it control font settings
         if use_resutil_style:
             ax.set_xlabel('Frequency (Hz)')
-            ax.set_ylabel('Power Spectral Density (V²/Hz)')
+            ax.set_ylabel(ylabel)
             if not hide_title:
                 ax.set_title('PSD Comparison')
             # Grid is already set by resutil style
             ax.legend(loc='best')
         else:
             ax.set_xlabel('Frequency (Hz)', fontsize=12, fontweight='bold')
-            ax.set_ylabel('Power Spectral Density (V²/Hz)', fontsize=12, fontweight='bold')
+            ax.set_ylabel(ylabel, fontsize=12, fontweight='bold')
             if not hide_title:
                 ax.set_title('PSD Comparison', fontsize=14, fontweight='bold')
             ax.grid(True, alpha=0.3)

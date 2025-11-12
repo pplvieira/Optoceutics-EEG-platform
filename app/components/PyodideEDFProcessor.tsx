@@ -169,6 +169,15 @@ export default function PyodideEDFProcessor() {
   // Hide title toggle for comparison plots
   const [hideComparisonTitle, setHideComparisonTitle] = useState(false);
 
+  // Power vs dB toggle for comparison plots
+  const [useDbScale, setUseDbScale] = useState(false);
+
+  // Gamma peak toggle for comparison plots
+  const [showGammaPeaks, setShowGammaPeaks] = useState(false);
+
+  // SNR at 40Hz toggle for comparison plots
+  const [showSnr40Hz, setShowSnr40Hz] = useState(false);
+
   // Comparison mode state
   const [comparisonMode, setComparisonMode] = useState<boolean>(false);
   const [comparisonTraces, setComparisonTraces] = useState<ComparisonTrace[]>([]);
@@ -3102,6 +3111,9 @@ export_modified_edf()
       pyodideRef.current.globals.set('use_resutil_style', useResutilStyle);
       pyodideRef.current.globals.set('show_alpha_peaks', showAlphaPeaks);
       pyodideRef.current.globals.set('hide_comparison_title', hideComparisonTitle);
+      pyodideRef.current.globals.set('use_db_scale', useDbScale);
+      pyodideRef.current.globals.set('show_gamma_peaks', showGammaPeaks);
+      pyodideRef.current.globals.set('show_snr_40hz', showSnr40Hz);
 
       // Build traces config in Python by converting bytes and merging with metadata
       const result = await pyodideRef.current.runPythonAsync(`
@@ -3147,7 +3159,10 @@ result_json = generate_comparison_psd(
     comparison_psd_params_py,
     use_resutil_style,
     show_alpha_peaks,
-    hide_comparison_title
+    hide_comparison_title,
+    use_db_scale,
+    show_gamma_peaks,
+    show_snr_40hz
 )
 
 result_json
@@ -3202,7 +3217,10 @@ result_json
     comparisonPsdParams,
     useResutilStyle,
     showAlphaPeaks,
-    hideComparisonTitle
+    hideComparisonTitle,
+    useDbScale,
+    showGammaPeaks,
+    showSnr40Hz
   ]);
 
   const runSSVEPAnalysis = async () => {
@@ -4499,6 +4517,60 @@ result_json
                         </label>
                         <p className="text-xs text-gray-500 ml-6 mt-1">
                           Remove the title from the comparison plot
+                        </p>
+                      </div>
+
+                      {/* Power/dB scale toggle */}
+                      <div className="md:col-span-3">
+                        <label className="flex items-center space-x-2">
+                          <input
+                            type="checkbox"
+                            checked={useDbScale}
+                            onChange={(e) => setUseDbScale(e.target.checked)}
+                            className="rounded text-purple-600 focus:ring-purple-500"
+                          />
+                          <span className="text-sm font-medium text-gray-700">
+                            Use dB scale instead of power
+                          </span>
+                        </label>
+                        <p className="text-xs text-gray-500 ml-6 mt-1">
+                          Convert PSD to decibels (10*log10) with linear y-axis
+                        </p>
+                      </div>
+
+                      {/* Gamma peak toggle */}
+                      <div className="md:col-span-3">
+                        <label className="flex items-center space-x-2">
+                          <input
+                            type="checkbox"
+                            checked={showGammaPeaks}
+                            onChange={(e) => setShowGammaPeaks(e.target.checked)}
+                            className="rounded text-orange-600 focus:ring-orange-500"
+                          />
+                          <span className="text-sm font-medium text-gray-700">
+                            Show gamma (40Hz) SSVEP peaks
+                          </span>
+                        </label>
+                        <p className="text-xs text-gray-500 ml-6 mt-1">
+                          Detect and display 40Hz SSVEP peaks using FOOOF
+                        </p>
+                      </div>
+
+                      {/* SNR at 40Hz toggle */}
+                      <div className="md:col-span-3">
+                        <label className="flex items-center space-x-2">
+                          <input
+                            type="checkbox"
+                            checked={showSnr40Hz}
+                            onChange={(e) => setShowSnr40Hz(e.target.checked)}
+                            className="rounded text-red-600 focus:ring-red-500"
+                          />
+                          <span className="text-sm font-medium text-gray-700">
+                            Show SNR at 40Hz
+                          </span>
+                        </label>
+                        <p className="text-xs text-gray-500 ml-6 mt-1">
+                          Compute and display SNR at 40Hz (requires gamma peaks)
                         </p>
                       </div>
                     </div>
