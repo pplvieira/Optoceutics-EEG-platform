@@ -163,6 +163,21 @@ export default function PyodideEDFProcessor() {
   // Resutil styling toggle
   const [useResutilStyle, setUseResutilStyle] = useState(false);
 
+  // Alpha peaks toggle for comparison plots
+  const [showAlphaPeaks, setShowAlphaPeaks] = useState(false);
+
+  // Hide title toggle for comparison plots
+  const [hideComparisonTitle, setHideComparisonTitle] = useState(false);
+
+  // Power vs dB toggle for comparison plots
+  const [useDbScale, setUseDbScale] = useState(false);
+
+  // Gamma peak toggle for comparison plots
+  const [showGammaPeaks, setShowGammaPeaks] = useState(false);
+
+  // SNR at 40Hz toggle for comparison plots
+  const [showSnr40Hz, setShowSnr40Hz] = useState(false);
+
   // Comparison mode state
   const [comparisonMode, setComparisonMode] = useState<boolean>(false);
   const [comparisonTraces, setComparisonTraces] = useState<ComparisonTrace[]>([]);
@@ -2369,6 +2384,39 @@ print("Python EDF analysis environment ready!")
     };
   }, [initializePyodide]);
 
+  // Reload file data into Python when active file changes
+  useEffect(() => {
+    if (!pyodideReady || !pyodideRef.current || !activeFileId) return;
+
+    const reloadActiveFile = async () => {
+      const activeFile = loadedFiles.find(f => f.id === activeFileId);
+      if (!activeFile) return;
+
+      try {
+        // Read file as bytes
+        const arrayBuffer = await activeFile.file.arrayBuffer();
+        const uint8Array = new Uint8Array(arrayBuffer);
+
+        // Set file data in Python globals
+        pyodideRef.current.globals.set('js_uint8_array', uint8Array);
+        pyodideRef.current.globals.set('filename', activeFile.file.name);
+
+        // Reload the file data into Python global variables
+        await pyodideRef.current.runPython(`
+          # Convert JavaScript Uint8Array to Python bytes
+          file_bytes = bytes(js_uint8_array)
+          read_edf_file(file_bytes, filename)
+        `);
+
+        console.log(`Reloaded file data into Python for: ${activeFile.file.name}`);
+      } catch (error) {
+        console.error('Error reloading file data into Python:', error);
+      }
+    };
+
+    reloadActiveFile();
+  }, [pyodideReady, activeFileId, loadedFiles]);
+
   const clearMessages = () => {
     setError(null);
     setSuccess(null);
@@ -3094,6 +3142,11 @@ export_modified_edf()
       pyodideRef.current.globals.set('traces_metadata', traceMetadata);
       pyodideRef.current.globals.set('comparison_psd_params', comparisonPsdParams);
       pyodideRef.current.globals.set('use_resutil_style', useResutilStyle);
+      pyodideRef.current.globals.set('show_alpha_peaks', showAlphaPeaks);
+      pyodideRef.current.globals.set('hide_comparison_title', hideComparisonTitle);
+      pyodideRef.current.globals.set('use_db_scale', useDbScale);
+      pyodideRef.current.globals.set('show_gamma_peaks', showGammaPeaks);
+      pyodideRef.current.globals.set('show_snr_40hz', showSnr40Hz);
 
       // Build traces config in Python by converting bytes and merging with metadata
       const result = await pyodideRef.current.runPythonAsync(`
@@ -3137,7 +3190,12 @@ print(f"Built {len(traces_config)} trace configurations")
 result_json = generate_comparison_psd(
     traces_config,
     comparison_psd_params_py,
-    use_resutil_style
+    use_resutil_style,
+    show_alpha_peaks,
+    hide_comparison_title,
+    use_db_scale,
+    show_gamma_peaks,
+    show_snr_40hz
 )
 
 result_json
@@ -3190,7 +3248,12 @@ result_json
     comparisonTraces,
     loadedFiles,
     comparisonPsdParams,
-    useResutilStyle
+    useResutilStyle,
+    showAlphaPeaks,
+    hideComparisonTitle,
+    useDbScale,
+    showGammaPeaks,
+    showSnr40Hz
   ]);
 
   const runSSVEPAnalysis = async () => {
@@ -4452,6 +4515,96 @@ result_json
                             Use Optoceutics custom styling (resutil)
                           </span>
                         </label>
+                      </div>
+
+                      {/* Alpha peaks toggle */}
+                      <div className="md:col-span-3">
+                        <label className="flex items-center space-x-2">
+                          <input
+                            type="checkbox"
+                            checked={showAlphaPeaks}
+                            onChange={(e) => setShowAlphaPeaks(e.target.checked)}
+                            className="rounded text-green-600 focus:ring-green-500"
+                          />
+                          <span className="text-sm font-medium text-gray-700">
+                            Show alpha peak centroids (FOOOF)
+                          </span>
+                        </label>
+                        <p className="text-xs text-gray-500 ml-6 mt-1">
+                          Compute and display alpha peak (8-12 Hz) frequencies using FOOOF analysis
+                        </p>
+                      </div>
+
+                      {/* Hide title toggle */}
+                      <div className="md:col-span-3">
+                        <label className="flex items-center space-x-2">
+                          <input
+                            type="checkbox"
+                            checked={hideComparisonTitle}
+                            onChange={(e) => setHideComparisonTitle(e.target.checked)}
+                            className="rounded text-gray-600 focus:ring-gray-500"
+                          />
+                          <span className="text-sm font-medium text-gray-700">
+                            Hide plot title
+                          </span>
+                        </label>
+                        <p className="text-xs text-gray-500 ml-6 mt-1">
+                          Remove the title from the comparison plot
+                        </p>
+                      </div>
+
+                      {/* Power/dB scale toggle */}
+                      <div className="md:col-span-3">
+                        <label className="flex items-center space-x-2">
+                          <input
+                            type="checkbox"
+                            checked={useDbScale}
+                            onChange={(e) => setUseDbScale(e.target.checked)}
+                            className="rounded text-purple-600 focus:ring-purple-500"
+                          />
+                          <span className="text-sm font-medium text-gray-700">
+                            Use dB scale instead of power
+                          </span>
+                        </label>
+                        <p className="text-xs text-gray-500 ml-6 mt-1">
+                          Convert PSD to decibels (10*log10) with linear y-axis
+                        </p>
+                      </div>
+
+                      {/* Gamma peak toggle */}
+                      <div className="md:col-span-3">
+                        <label className="flex items-center space-x-2">
+                          <input
+                            type="checkbox"
+                            checked={showGammaPeaks}
+                            onChange={(e) => setShowGammaPeaks(e.target.checked)}
+                            className="rounded text-orange-600 focus:ring-orange-500"
+                          />
+                          <span className="text-sm font-medium text-gray-700">
+                            Show gamma (40Hz) SSVEP peaks
+                          </span>
+                        </label>
+                        <p className="text-xs text-gray-500 ml-6 mt-1">
+                          Detect and display 40Hz SSVEP peaks using FOOOF
+                        </p>
+                      </div>
+
+                      {/* SNR at 40Hz toggle */}
+                      <div className="md:col-span-3">
+                        <label className="flex items-center space-x-2">
+                          <input
+                            type="checkbox"
+                            checked={showSnr40Hz}
+                            onChange={(e) => setShowSnr40Hz(e.target.checked)}
+                            className="rounded text-red-600 focus:ring-red-500"
+                          />
+                          <span className="text-sm font-medium text-gray-700">
+                            Show SNR at 40Hz
+                          </span>
+                        </label>
+                        <p className="text-xs text-gray-500 ml-6 mt-1">
+                          Compute and display SNR at 40Hz (requires gamma peaks)
+                        </p>
                       </div>
                     </div>
                   </div>
