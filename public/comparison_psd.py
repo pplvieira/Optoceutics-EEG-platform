@@ -377,7 +377,7 @@ def generate_comparison_psd(traces_config, psd_params, use_resutil_style=False, 
                     y_positions = [0.87 + 0.09 (i % 2) for i in range(num_peaks)] #new
                     # Alternate left and right offsets
                     # x_offsets = [(-5 if i % 2 == 0 else 5) for i in range(num_peaks)]
-                    x_offsets = [(5*( i - (num_peaks-1)/2 ) for i in range(num_peaks)] # NEW
+                    x_offsets = [(5*( i - (num_peaks-1)/2 )) for i in range(num_peaks)] # NEW
 
                 # Add labels for each trace with alpha peak
                 for idx, peak_info in enumerate(valid_peaks):
