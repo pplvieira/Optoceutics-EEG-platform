@@ -1,0 +1,340 @@
+---
+#title: "Steady-State Visually Evoked Potential Estimation"
+#author: "Mark Alexander Henney"
+#date: "May 2023"
+output:
+  # bookdown::html_document2: default
+  bookdown::html_document2: 
+    toc: no
+    number_sections: FALSE
+---
+
+```{r, eval=T, message=FALSE, warning=FALSE, echo = FALSE}
+library(dplyr)
+library(ggplot2)
+library(RColorBrewer)
+library(lme4)
+library(lmerTest)
+library(emmeans)
+library(xtable)
+library(glue)
+library(summarytools)
+library(doBy) # maxn
+library(latex2exp) # tex labels
+```
+
+```{r setup, echo=F}
+library(reticulate)
+use_python("/Library/Frameworks/Python.framework/Versions/3.9/bin/python3")
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+```{python, echo=F, message=F}
+import sys
+from pathlib import Path
+import warnings
+
+warnings.filterwarnings('ignore')
+SIMULATE = 1
+```
+
+# Peak Over Average Noise (SNR)
+
+The following describes a derivition on the method for 
+[signal-to-noise ratio (SNR) estimation](https://mne.tools/dev/auto_tutorials/time-freq/50_ssvep.html)
+presented by the authors of the [MNE library](https://mne.tools/stable/index.html).
+While it seems intuitive to compare the peak value to the average noise, this poses problems
+caused by the noise variance that will become evident.
+
+The $\mathrm{SNR}_i$ value of an epoch, $i$, is calculated according to the following procedure (also
+illustrated in Figure \@ref(fig:snr-fig)):
+
+Based on Equation \@ref(eq:b6-1), the SNR is computed as
+
+\begin{equation}
+  \mathrm{SNR}_{i} = 10 \operatorname{log}_{10} \left(
+    \frac{\hat{S}_{i}^w(f_i)}{\mathrm{Noise}(f_i)},
+    \right)
+  (\#eq:b7)
+\end{equation}
+
+in which the noise is defined by
+
+\begin{equation}
+    \mathrm{Noise}(f_i) = 
+    \frac{\sum_f \hat{S}_{i}^w(f) \odot k(f, f_i)}
+    {\sum_f k(f, f_i)},
+  (\#eq:b8)
+\end{equation}
+
+$\odot$ is the Hadamard product, and the kernel function, $k(f,f_i)$, selects the bands
+neighbouing $f_i$ by
+
+\begin{equation}
+        k(f, f_i)= \begin{cases}
+      1 & \text { for } f - 2 \mathrm{ Hz} < f_i < f - 1 \mathrm{ Hz} \text { and } f + 1 \mathrm{ Hz} < f_i < f + 2 \mathrm{ Hz} \\
+      0 & \text { Otherwise }
+    \end{cases} .
+  (\#eq:b8-1)
+\end{equation}
+
+```{python, echo=F, message=F}
+if SIMULATE:
+  from _mk_mockup_figs import *
+```
+
+```{r snr-fig, echo=FALSE, out.width='100%', fig.cap="**SNR Estimation Procedure**"}
+knitr::include_graphics(
+  glue("../img/snr-mockup.png")
+  )
+```
+
+## SNR Simulations {.tabset}
+
+In the following, we will run some simulations to test the behaviour of \@ref(eq:c1) when provided with PSDs of
+different kinds. The input PSD from which we calculate the SNR is defined by:
+
+\begin{equation}
+  S(f) = X(f) + N(f),
+  (\#eq:s1)
+\end{equation}
+
+where
+
+\begin{equation}
+    X(f) = \begin{cases}
+      S_f - N_f & \text { for } f = 40 \\
+      0 & \text { Otherwise }
+    \end{cases},
+  (\#eq:s3)
+\end{equation}
+
+and
+
+\begin{equation}
+    N(f) \sim \mathscr{N}\left(\mu_S, \sigma_S^2\right).
+  (\#eq:s3)
+\end{equation}
+
+Thus, the parameters are the peak value, $S_f$, noise mean, $\mu_S$, and the noise standard deviation $\sigma_S$.
+
+In Figure \@ref(fig:snr-sim-par-all) of the [SNR Response Overview] tab, we plot the estimated SNR values when simulating PSDs
+with combinations of $\mu_S, S_f,$ and $\sigma_S$. In the top row, where $S_f = 0$, the SNR estimates
+are strictly confined to 0 and are unaffected by the other parameters. In the middle row, $S_f=0$, we see
+that the mean SNR estimates scale only with $\mu_S$, while the variance of the SNR estimates scale
+with both $\mu_S$ and $\sigma_S$. The lower row where $S_f = 2$ shows the same phenomenon, though the effects
+are more clear.
+
+In Figure \@ref(fig:snr-sim-par-height) of the [Varying $S_f$] tab, we plot the estimated SNR values when
+simulating PSDs with fixed $\mu_S=1$ and $\sigma_S=1$ and variable $S_f \in [-5; 10]$. This shows a well-behaved
+proportional relationship between the value of $S_f$ and the SNR estimate.
+
+In Figure \@ref(fig:snr-sim-par-mu) of the [Varying $\mu_S$] tab, we plot the estimated SNR values when
+simulating PSDs with fixed $S_f=5$ and $\sigma_S=1$ and variable $\mu_S \in [-1; 1]$. From this, the
+inversely proportional relationship between $\mu_S$ and SNR is evident, which also results in a discontinuity
+between positive and negative values.
+
+In Figure \@ref(fig:snr-sim-par-sigma) of the [Varying $\sigma_S$] tab, we plot the estimated SNR values when
+simulating PSDs with fixed $S_f=5$ and $\sigma_S=1$ and variable $\mu_S \in [-1; 1]$. This showcases, perhaps,
+the most detrimental attribute of the SNR estimator: It is indifferent to changes in the noise variance, which
+results in unfavourably high peak estimates even if they are entirely drowned in noise. This, combined with
+too liberal peak finding (discussed below), produced very upwards biased results.
+
+### SNR Response Overview {-}
+```{r, echo=F}
+cap_sim_snr_all = "**Signal-to-noise Ratio Simulations** |
+                      SSVEP estimates using SNR and variable $\\mu_S, S_f,$ and $\\sigma_S$.
+                      In the top row, where $S_f = 0$, the SNR estimates
+are strictly confined to 0 and are unaffected by the other parameters. In the middle row, $S_f=0$, we see
+that the mean SNR estimates scale only with $\\mu_S$, while the variance of the SNR estimates scale
+with both $\\mu_S$ and $\\sigma_S$. The lower row where $S_f = 2$ shows the same phenomenon, though the effects
+are more clear."
+```
+
+```{r snr-sim-par-all, echo=FALSE, out.width='100%', fig.cap=cap_sim_snr_all}
+knitr::include_graphics(
+  glue("../img/sim-snr_par-all.png")
+  )
+```
+### SNR Varying $S_f$ {-}
+
+```{r echo=F}
+snr_height_cap = "**SNR Estimation by $S_f$** | Estimates for SNR are
+                    proportional to the value of $S_f$."
+```
+
+```{r snr-sim-par-height, echo=FALSE, out.width='100%', fig.cap=snr_height_cap}
+knitr::include_graphics(
+  glue("../img/sim-snr_par-height.png")
+  )
+```
+
+### SNR Varying $\mu_S$ {-}
+
+```{r echo=F}
+snr_mu_cap = "**SNR Estimation by $\\mu_S$** | Estimates for SNR are inversely
+                    proportional to the value of $\\mu$, resulting in a discontinuity
+                    at $\\mu = 0$."
+```
+
+```{r snr-sim-par-mu, echo=FALSE, out.width='100%', fig.cap=snr_mu_cap}
+knitr::include_graphics(
+  glue("../img/sim-snr_par-mu.png")
+  )
+```
+
+### SNR Varying $\sigma_S$ {-}
+
+```{r echo=F}
+snr_sigma_cap = "**SNR Estimation by $\\sigma_S$** | Estimates for SNR are
+                    invariant to the value of $\\sigma_S$, such that even peaks
+                    that do not stand out from the noise (but are above the mean)
+                    are estimated as posive."
+```
+
+```{r snr-sim-par-sigma, echo=FALSE, out.width='100%', fig.cap=snr_sigma_cap}
+knitr::include_graphics(
+  glue("../img/sim-snr_par-sigma.png")
+  )
+```
+
+# Peak Contrast Estimation (SNC)
+
+As an alternative to the SNR estimator, we will here introduce the signal-to-noise contrast (SNC)
+estimator, which is more well-behaved.
+
+We dine the SNC as the peak height over the average noise (i.e. the difference), normalised by
+the standard deviation of the noise. Here, we denote the peak value at the stimulation frequency, f, as $S_f$, the
+average noise as $\mu_S$, and the standard deviation of the noise as $\sigma_S$. This lets us express the contrast
+as:
+
+\begin{equation}
+  \mathrm{SNC} = 
+    \frac{S_f - \hat{\mu}_S}{\hat{\sigma}_S}.
+    (\#eq:c1)
+\end{equation}
+
+All terms in Equation \@ref(eq:c1) are scalar values, though they are derived from the input
+PSD. In the simplest case, we will estimate these from a band around $f$, such as $[f - 1; f + 1]$ Hz. Under the
+assumption that the peak has the shape of a delta function (fair if using boxcar window), we consider all
+frequency bins that do not constitute the peak as noise. We define an indicator function that can extract this:
+
+\begin{equation}
+        k(f, f') = \begin{cases}
+      0 & \text { for } f' = f \\
+      0 & \text { for } f' < f - 1 \\
+      0 & \text { for } f' > f + 1 \\
+      1 & \text { Otherwise }
+    \end{cases},
+  (\#eq:c2)
+\end{equation}
+
+where $f'$ is the dependent variable and $f$ is the frequency of the peak. Then, we can use \@ref(eq:b8)
+to calculate the mean of the noise. Here, we rewrite it slightly to match the notation:
+
+\begin{equation}
+    \hat{\mu}_S = 
+    \frac{\sum_f S(f) \odot k(f, f')}
+    {\sum_f k(f, f')}.
+  (\#eq:c3)
+\end{equation}
+
+Using the estimate for the mean noise, $\hat{\mu}_S$, and the indicator function, \@ref(eq:c2), we calculate the noise variance as
+
+\begin{equation}
+    \hat{\sigma}^2_S = 
+    \frac{ \left( \sum_f S(f) \odot k(f, f') - \hat{\mu}_S \right)^2}
+        {\sum_f k(f, f')}.
+  (\#eq:c4)
+\end{equation}
+
+```{python, echo=F, message=F, warning=F}
+if SIMULATE:
+
+  from tests.test_siglib import simulate_height, simulate_mu, simulate_sigma, snr_simulation
+  simulate_height()
+  simulate_mu()
+  simulate_sigma()
+  snr_simulation()
+```
+
+## SNC Simulations {.tabset}
+
+In the following, we will run some simulations to test the behaviour of \@ref(eq:c1) when provided with PSDs of
+different kinds. The input PSD from which we calculate the SNC is identical to those previously defined
+by Equations \@ref(eq:s1)-\@ref(eq:s3).
+
+In Figure \@ref(fig:contrast-sim-par-all) of the [SNC Response Overview] tab, we plot the estimated SNC values
+when simulating PSDs with combinations of $\mu_S, S_f,$ and $\sigma_S$. In the top row, where $S_f = 0$, the SNC estimates
+are shifted downwards depending on $\mu$ and scaled in mean and variance by $\sigma$.
+This behaviour translates well to the two rows below, in which the resulting distributions are shifted upwards
+corresponding to the increase in $S_f$. 
+
+In Figure \@ref(fig:contrast-sim-par-height) of the [SNC Varying $S_f$] tab, we plot the estimated SNC values when
+simulating PSDs with fixed $\mu_S=1$ and $\sigma_S=1$ and variable $S_f \in [-5; 10]$. As with the SNR estimator, 
+the SNC estimates scale proportionally to $S_f$.
+
+In Figure \@ref(fig:contrast-sim-par-mu) of the [SNC Varying $\mu_S$] tab, we plot the estimated SNC values when
+simulating PSDs with fixed $S_f =5$ and $\sigma_S=1$ and variable $\mu_S \in [-1; 1]$. Unlike the SNR estimates,
+the estimates for SNC are (negatively) proportional to the value of $\mu_S$.
+
+In Figure \@ref(fig:contrast-sim-par-sigma) of the [SNC Varying $\sigma_S$] tab, we plot the estimated SNC values when
+simulating PSDs with fixed $S_f =5$ and $\mu_S=1$ and variable $\sigma_S \in [-1; 1]$. Unlike the SNR estimates,
+the estimates for SNC are inversely proportional to the value of $\sigma_S$.
+
+
+### SNC Response Overview {-}
+```{r, echo=F}
+cap_sim_contrast_all = "**Signal-to-noise Contrast Simulations** |
+                      SSVEP estimates using SNC and variable $\\mu_S, S_f,$ and $\\sigma_S$.
+                      In the top row, where $S_f = 0$, the SNC estimates
+                      are shifted downwards depending on $\\mu$ and scaled in mean and variance by $\\sigma$.
+                      This behaviour translates well to the two rows below, in which the resulting
+                      distributions are shifted upwards corresponding to the increase in $S_f$. "
+```
+
+
+```{r contrast-sim-par-all, echo=FALSE, out.width='100%', fig.cap=cap_sim_contrast_all}
+knitr::include_graphics(
+  glue("../img/sim-contrast_par-all.png")
+  )
+```
+
+### SNC Varying $S_f$ {-}
+
+```{r echo=F}
+snc_height_cap = "**Contrast Estimation by $S_f$** | Estimates for SNC are
+                proportional to the value of $S_f$."
+```
+
+```{r contrast-sim-par-height, echo=FALSE, out.width='100%', fig.cap=snc_height_cap}
+knitr::include_graphics(
+  glue("../img/sim-contrast_par-height.png")
+  )
+```
+
+### SNC Varying $\mu_S$ {-}
+
+```{r echo=F}
+snc_mu_cap = "**Contrast Estimation by $\\mu_S$** | Estimates for SNC are negatively
+                proportional to the value of $\\mu_S$."
+```
+
+```{r contrast-sim-par-mu, echo=FALSE, out.width='100%', fig.cap=snc_mu_cap}
+knitr::include_graphics(
+  glue("../img/sim-contrast_par-mu.png")
+  )
+```
+
+### SNC Varying $\sigma_S$ {-}
+
+```{r echo=F}
+snc_sigma_cap = "**Contrast Estimation by $\\sigma_S$** | Estimates for SNC are inversely
+                proportional to the value of $\\sigma_S$."
+```
+
+```{r contrast-sim-par-sigma, echo=FALSE, out.width='100%', fig.cap=snc_sigma_cap}
+knitr::include_graphics(
+  glue("../img/sim-contrast_par-sigma.png")
+  )
+```

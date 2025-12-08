@@ -1,0 +1,8 @@
+{
+    "Blue":   {"set1": [1000, 0, 0, 0, 0,0 ], "set2": [0] * 6,   "mode": 'set1',  "name": "Blue",  "frequency": 40}, 
+    "Cyan":   {"set1": [0, 1000, 0, 0, 0, 0], "set2": [0] * 6,   "mode": 'set1',  "name": "Cyan",  "frequency": 40}, 
+    "Green":  {"set1": [0, 0, 1000, 0, 0, 0], "set2": [0] * 6,   "mode": 'set1',  "name": "Green", "frequency": 40}, 
+    "Lime":   {"set1": [0, 0, 0, 1000, 0, 0], "set2": [0] * 6,   "mode": 'set1',  "name": "Lime",  "frequency": 40}, 
+    "Amber":  {"set1": [0, 0, 0, 0, 1000, 0], "set2": [0] * 6,   "mode": 'set1',  "name": "Amber", "frequency": 40},
+    "Red":    {"set1": [0, 0, 0, 0, 0, 1000], "set2": [0] * 6,   "mode": 'set1',  "name": "Red",   "frequency": 40}
+}
