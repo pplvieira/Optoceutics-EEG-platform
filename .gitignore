@@ -24358,3 +24358,7 @@ python-backend/edf-env/share/man/man1/ttx.1
 
 # Build logs
 build*.log
+
+# resutil folder (handled by remote)
+resutil/
+util/
