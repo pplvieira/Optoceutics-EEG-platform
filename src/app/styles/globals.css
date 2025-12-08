@@ -1,0 +1,76 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Base colors */
+  --background: #f8fafc;
+  --foreground: #1e293b;
+  
+  /* Brand Colors - Primary (from eegbrand.sty) */
+  --brand-navy: #002D5F;           /* BrandNavy - Professional, medical authority */
+  --brand-gold: #D4A439;           /* BrandGold - Innovation, progress */
+  --brand-light-gold: #E8C547;    /* BrandLightGold - Optimism */
+  --brand-white: #FFFFFF;         /* BrandWhite */
+  
+  /* Brand Colors - Supporting */
+  --brand-light-gray: #F9FAFB;    /* BrandLightGray */
+  --brand-med-gray: #6B7280;      /* BrandMedGray */
+  --brand-green: #10B981;         /* BrandGreen - Success */
+  --brand-red: #EF4444;           /* BrandRed - Error */
+  --brand-blue: #3B82F6;          /* BrandBlue */
+  
+  /* Legacy aliases (for backward compatibility during migration) */
+  --navy: var(--brand-navy);
+  --navy-dark: #001A3A;            /* Darker shade of brand navy */
+  --navy-light: #004A8F;           /* Lighter shade of brand navy */
+  --gold: var(--brand-gold);
+  --gold-light: var(--brand-light-gold);
+  --wood: #d2b48c;                 /* Keep wood color as is */
+  
+  /* Dark mode colors */
+  --dark-bg: #1a1a1a;
+  --dark-bg-secondary: #2a2a2a;
+  --dark-bg-tertiary: #333333;
+  --dark-text: #e2e8f0;
+  --dark-text-secondary: #94a3b8;
+  --dark-border: #404040;
+  --dark-card: #252525;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: 'Inter', system-ui, sans-serif;
+}
+
+/* P300 Experiment Flash Animations */
+@keyframes flash-white {
+  0% {
+    opacity: 0;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.95;
+    transform: scale(1.001);
+  }
+  100% {
+    opacity: 0.95;
+    transform: scale(1);
+  }
+}
+
+@keyframes flash-red {
+  0% {
+    opacity: 0;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.90;
+    transform: scale(1.002);
+  }
+  100% {
+    opacity: 0.90;
+    transform: scale(1);
+  }
+}

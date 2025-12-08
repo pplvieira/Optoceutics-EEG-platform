@@ -76,7 +76,7 @@ npm run dev
 If you prefer traditional server setup:
 
 ```bash
-cd python-backend
+cd backend
 pip install -r requirements.txt
 python main.py
 ```
@@ -129,7 +129,7 @@ Then select "Local Backend" mode in the interface.
 ### Python Backend
 - FastAPI, pyedflib, NumPy, SciPy
 - scikit-learn, matplotlib, seaborn
-- See `python-backend/requirements.txt`
+- See `backend/requirements.txt`
 
 ### Frontend
 - Next.js 15, React 19, TypeScript
@@ -166,16 +166,28 @@ Then select "Local Backend" mode in the interface.
 
 ```
 eeg-platform/
-├── app/
-│   ├── components/
-│   │   ├── ComprehensiveEDFDashboard.tsx  # Main analysis interface
-│   │   └── ...
-│   ├── page.tsx                          # Multi-mode application
-│   └── types/
-├── python-backend/
-│   ├── main.py                          # FastAPI server + SSVEP analysis
+├── src/
+│   └── app/                            # Next.js app directory
+│       ├── components/
+│       │   ├── common/                # Shared UI components
+│       │   ├── dashboard/              # Dashboard components
+│       │   ├── edf-processor/          # EDF processing components
+│       │   ├── experiments/            # Experiment components
+│       │   └── ssvep-tool/            # SSVEP analysis tool
+│       ├── hooks/                      # Custom React hooks
+│       ├── lib/                        # Utility libraries
+│       ├── services/                   # Business logic services
+│       ├── styles/                     # CSS files
+│       ├── types/                      # TypeScript type definitions
+│       └── utils/                      # Utility functions
+├── backend/                            # Python FastAPI backend (renamed from python-backend)
+│   ├── main.py                         # FastAPI server + SSVEP analysis
 │   └── requirements.txt
-└── api/                                # Legacy serverless functions
+├── docs/                               # Project documentation
+│   ├── DESIGN_SYSTEM.md                # Brand design guidelines
+│   └── ...
+├── scripts/                            # Build and utility scripts
+└── public/                             # Static assets
 ```
 
 ## Research Applications

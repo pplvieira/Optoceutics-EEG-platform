@@ -1,7 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  reactStrictMode: true,
+  // Set outputFileTracingRoot to silence warning about multiple lockfiles
+  outputFileTracingRoot: process.cwd(),
 };
 
 export default nextConfig;
