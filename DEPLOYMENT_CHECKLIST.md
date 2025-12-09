@@ -103,6 +103,8 @@ git push origin master
 
 Vercel will automatically deploy your changes!
 
+> Note: We removed the custom `functions` pattern in `vercel.json` (it was pointing to `api/**/*.py` that does not exist). Vercel now uses its defaults, so deployments will not fail on missing serverless functions. If you add Vercel functions later, update `vercel.json` accordingly.
+
 ---
 
 ## Automation (Optional)
