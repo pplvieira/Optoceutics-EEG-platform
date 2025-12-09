@@ -3,7 +3,7 @@
 /* eslint-disable @next/next/no-img-element */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { generatePatientReportPDF, generatePatientReportDOCX, downloadPDF, downloadDOCX, PatientReportData } from '../services/pdfExporter';
+import { generatePatientReportPDF, generatePatientReportDOCX, downloadPDF, downloadDOCX, PatientReportData } from '../../services/pdfExporter';
 
 // Pyodide types are now in ../types/pyodide.ts
 import type { PyodideInstance } from '../../types/pyodide';
@@ -113,13 +113,8 @@ interface ComparisonPlot {
 
 export default function PyodideEDFProcessor() {
   // Use Pyodide hook for initialization
-  const { pyodide, pyodideReady, pyodideLoading, loadingMessage: pyodideLoadingMessage, edfLibrary, initializePyodide: initializePyodideHook } = usePyodide();
+  const { pyodide, pyodideReady, pyodideLoading, loadingMessage: pyodideLoadingMessage } = usePyodide();
   
-  const [currentFile, setCurrentFile] = useState<File | null>(null);
-  const [metadata, setMetadata] = useState<EDFMetadata | null>(null);
-  const [pyodideReady, setPyodideReady] = useState(false);
-  const [pyodideLoading, setPyodideLoading] = useState(false);
-
   // Multi-file management state (defined early for use in computed properties)
   const [loadedFiles, setLoadedFiles] = useState<LoadedFile[]>([]);
   const [activeFileId, setActiveFileId] = useState<string | null>(null);
@@ -274,12 +269,12 @@ export default function PyodideEDFProcessor() {
     if (!pyodideReady || !pyodide) return;
     
     const setupPythonEnvironment = async () => {
+      let edf_library_available: 'mne' | 'pyedflib' | false = false;
       try {
         setLoadingMessage('Setting up analysis environment...');
-        await pyodide.runPython(`
-        const micropip = pyodide.pyimport("micropip");
+        const micropip = pyodide.pyimport('micropip') as any;
         
-        // First try MNE (your preferred library)
+        // First try MNE (preferred)
         try {
           setLoadingMessage('Installing MNE-Python...');
           await micropip.install(['mne']);
@@ -300,8 +295,8 @@ export default function PyodideEDFProcessor() {
             edf_library_available = false;
           }
         }
-      } catch {
-        console.warn('Package installation failed, using pure Python EDF reader');
+      } catch (error) {
+        console.warn('Package installation failed, using pure Python EDF reader', error);
         setLoadingMessage('Using built-in pure Python EDF reader');
         edf_library_available = false;
       }
@@ -309,7 +304,7 @@ export default function PyodideEDFProcessor() {
       // Install custom resutil package
       try {
         setLoadingMessage('Installing resutil package...');
-        const micropip = pyodide.pyimport("micropip");
+        const micropip = pyodide.pyimport("micropip") as any;
         await micropip.install('/pyodide-packages/resutil-0.4.0-py3-none-any.whl');
         setLoadingMessage('resutil installed successfully');
 
@@ -325,7 +320,7 @@ export default function PyodideEDFProcessor() {
       // Install FOOOF library for spectral parameterization
       try {
         setLoadingMessage('Installing FOOOF library...');
-        const micropip = pyodide.pyimport("micropip");
+        const micropip = pyodide.pyimport("micropip") as any;
         await micropip.install(['fooof']);
         setLoadingMessage('FOOOF library installed successfully');
         console.log('FOOOF library installed');
@@ -370,7 +365,7 @@ export default function PyodideEDFProcessor() {
 
       try {
         setLoadingMessage('Installing resutil (Optoceutics styling library)...');
-        const micropip = pyodide.pyimport("micropip");
+        const micropip = pyodide.pyimport("micropip") as any;
 
         // Install markdown dependency (required by resutil core)
         await micropip.install(['markdown']);
@@ -407,6 +402,9 @@ print("✓ Resutil (v0.4.0) loaded successfully with plotlib module (Stage 1)")
             const wheelBytes = await wheelResponse.arrayBuffer();
 
             // Write to Pyodide filesystem
+            if (!pyodide.FS) {
+              throw new Error('Pyodide FS is not available for writing the wheel.');
+            }
             pyodide.FS.writeFile('/tmp/resutil.whl', new Uint8Array(wheelBytes));
 
             // Extract and install manually
@@ -493,10 +491,11 @@ print("✓ Resutil loaded successfully with lightweight plotlib module (Stage 3:
         console.warn('Resutil installation failed completely (will use default matplotlib styling):', error);
         setLoadingMessage('Using default matplotlib styling');
       }
-
+      
       // Setup Python environment
-      setLoadingMessage('Setting up analysis environment...');
-      await pyodide.runPython(`
+      try {
+        setLoadingMessage('Setting up analysis environment...');
+        await pyodide.runPython(`
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib
@@ -2344,7 +2343,7 @@ Expected Differences:
     })
 
 print("Python EDF analysis environment ready!")
-      `);
+        `);
         
         setSuccess('Python environment loaded successfully!');
         setLoadingMessage('');
@@ -2363,6 +2362,8 @@ print("Python EDF analysis environment ready!")
     if (!pyodideReady || !pyodideRef.current || !activeFileId) return;
 
     const reloadActiveFile = async () => {
+      const pyInstance = pyodideRef.current;
+      if (!pyInstance) return;
       const activeFile = loadedFiles.find(f => f.id === activeFileId);
       if (!activeFile) return;
 
@@ -2372,11 +2373,11 @@ print("Python EDF analysis environment ready!")
         const uint8Array = new Uint8Array(arrayBuffer);
 
         // Set file data in Python globals
-        pyodideRef.current.globals.set('js_uint8_array', uint8Array);
-        pyodideRef.current.globals.set('filename', activeFile.file.name);
+        pyInstance.globals.set('js_uint8_array', uint8Array);
+        pyInstance.globals.set('filename', activeFile.file.name);
 
         // Reload the file data into Python global variables
-        await pyodideRef.current.runPython(`
+        await pyInstance.runPython(`
           # Convert JavaScript Uint8Array to Python bytes
           file_bytes = bytes(js_uint8_array)
           read_edf_file(file_bytes, filename)
@@ -2733,28 +2734,28 @@ export_modified_edf()
       // Read file as bytes
       const arrayBuffer = await file.arrayBuffer();
       const uint8Array = new Uint8Array(arrayBuffer);
-
+      
       // Set file data in Python globals using proper Pyodide method
       pyodideRef.current.globals.set('js_uint8_array', uint8Array);
       pyodideRef.current.globals.set('filename', file.name);
-
+      
       // Convert JavaScript Uint8Array to Python bytes
       const result = await pyodideRef.current.runPython(`
         # Convert JavaScript Uint8Array to Python bytes
         file_bytes = bytes(js_uint8_array)
-
+        
         print(f"Converted to Python bytes: {len(file_bytes)} bytes, type: {type(file_bytes)}")
-
+        
         read_edf_file(file_bytes, filename)
       `);
-
-      const parsedResult = JSON.parse(result);
-
+      
+      const parsedResult = JSON.parse(result as string);
+      
       if (parsedResult.error) {
         setError(`Failed to read EDF file: ${parsedResult.error}`);
         return false;
       }
-
+      
       // Create unique ID for this file
       const fileId = `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
@@ -2772,32 +2773,32 @@ export_modified_edf()
       setActiveFileId(fileId);
 
       setSuccess(`File loaded: ${parsedResult.filename} (${parsedResult.num_channels} channels, ${parsedResult.duration_seconds?.toFixed(1)}s)`);
-
+      
       // Set all channels as selected by default
       if (parsedResult.channel_names && parsedResult.channel_names.length > 0) {
         setSelectedChannels(parsedResult.channel_names);
       }
-
+      
       // Initialize time frame to full duration
       if (parsedResult.duration_seconds) {
         setTimeFrameEnd(parsedResult.duration_seconds);
       }
-
+      
       // Initialize annotations if available
       if (parsedResult.annotations && parsedResult.annotations.length > 0) {
         setAnnotations(parsedResult.annotations);
       } else {
         setAnnotations([]);
       }
-
+      
       // Clear previous results when loading first file
       if (loadedFiles.length === 0) {
-        setAnalysisResults([]);
-        setSSVEPResult(null);
+      setAnalysisResults([]);
+      setSSVEPResult(null);
       }
 
       return true;
-
+      
     } catch (error) {
       console.error('File processing error:', error);
       setError(`File processing failed: ${error}`);
@@ -3175,7 +3176,7 @@ result_json = generate_comparison_psd(
 result_json
       `);
 
-      const parsedResult = JSON.parse(result);
+      const parsedResult = JSON.parse(result as string);
 
       if (parsedResult.success) {
         setCurrentComparisonPlot(parsedResult.plot_base64);
@@ -3492,16 +3493,16 @@ result_json
         .filter(plot => plot !== null) as Array<{ plotBase64: string; caption: string; analysisType: string }>;
 
       // Get first PSD result for legacy fields
-      const psdResults = analysisResults.filter(r => r.analysis_type === 'psd');
+    const psdResults = analysisResults.filter(r => r.analysis_type === 'psd');
       psdResult = psdResults.length > 0 ? psdResults[psdResults.length - 1] : null;
     } else {
       // Backward compatibility: if no plots selected, use last PSD
       const psdResults = analysisResults.filter(r => r.analysis_type === 'psd');
       psdResult = psdResults.length > 0 ? psdResults[psdResults.length - 1] : null;
 
-      if (!psdResult) {
-        return null;
-      }
+    if (!psdResult) {
+      return null;
+    }
 
       // Single plot mode (legacy)
       plots = [{
@@ -3745,16 +3746,10 @@ result_json
           const resultId = index + 10; // Offset to avoid collision with SSVEP (id 0)
           const isCollapsed = collapsedResults.has(resultId);
           const isSelected = selectedPlotsForReport.includes(result.id || '');
-
+          
           return (
             <div key={index} className="mb-6 border rounded-lg">
               <div className="flex justify-between items-center p-3 bg-gray-50 rounded-t-lg">
-                <h4 className="text-md font-semibold capitalize">
-                  {result.analysis_type.replace('_', ' ')} Analysis
-                  {(result.analysis_type === 'psd' || result.analysis_type === 'snr') && result.parameters?.method && (
-                    <span className="text-sm font-normal text-brand-blue ml-2">
-                      ({result.parameters.method.charAt(0).toUpperCase() + result.parameters.method.slice(1)})
-                    </span>
                 <div className="flex items-center gap-3 flex-1">
                   {/* Plot selection checkbox */}
                   {result.plot_base64 && (
@@ -3766,19 +3761,19 @@ result_json
                       title="Include in report"
                     />
                   )}
-                  <h4 className="text-md font-semibold capitalize">
-                    {result.analysis_type.replace('_', ' ')} Analysis
-                    {(result.analysis_type === 'psd' || result.analysis_type === 'snr') && result.parameters?.method && (
-                      <span className="text-sm font-normal text-blue-600 ml-2">
-                        ({result.parameters.method.charAt(0).toUpperCase() + result.parameters.method.slice(1)})
-                      </span>
-                    )}
-                    {result.time_frame && (
-                      <span className="text-sm font-normal text-gray-600 ml-2">
-                        ({formatTimeHMS(result.time_frame.start) || result.time_frame.start.toFixed(1)+'s'} - {formatTimeHMS(result.time_frame.end) || result.time_frame.end.toFixed(1)+'s'})
-                      </span>
-                    )}
-                  </h4>
+                <h4 className="text-md font-semibold capitalize">
+                  {result.analysis_type.replace('_', ' ')} Analysis
+                  {(result.analysis_type === 'psd' || result.analysis_type === 'snr') && result.parameters?.method && (
+                    <span className="text-sm font-normal text-blue-600 ml-2">
+                      ({result.parameters.method.charAt(0).toUpperCase() + result.parameters.method.slice(1)})
+                    </span>
+                  )}
+                  {result.time_frame && (
+                    <span className="text-sm font-normal text-gray-600 ml-2">
+                      ({formatTimeHMS(result.time_frame.start) || result.time_frame.start.toFixed(1)+'s'} - {formatTimeHMS(result.time_frame.end) || result.time_frame.end.toFixed(1)+'s'})
+                    </span>
+                  )}
+                </h4>
                 </div>
                 <button
                   onClick={() => toggleCollapse(resultId)}
@@ -3949,8 +3944,11 @@ result_json
                     <svg className="w-4 h-4 text-brand-green" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
-              <h2 className="text-lg font-semibold mb-3">Loaded Files ({loadedFiles.length})</h2>
-
+                  </div>
+                  <h2 className="text-lg font-semibold mb-3">Loaded Files ({loadedFiles.length})</h2>
+                  </div>
+                </div>
+                
               {/* File list */}
               <div className="space-y-2 mb-4">
                 {loadedFiles.map((loadedFile) => (
@@ -4017,17 +4015,17 @@ result_json
               </div>
 
               {/* Add another file button */}
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={!pyodideReady}
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={!pyodideReady}
                 className="w-full bg-green-600 hover:bg-green-700 text-white text-sm font-medium py-2 px-4 rounded disabled:opacity-50 transition-colors flex items-center justify-center space-x-2"
-              >
+                >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                 </svg>
                 <span>Add Another File</span>
-              </button>
-
+                </button>
+              
               <input
                 type="file"
                 ref={fileInputRef}

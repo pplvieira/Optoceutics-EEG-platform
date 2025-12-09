@@ -7,6 +7,9 @@ export interface PyodideInstance {
   runPythonAsync: (code: string) => Promise<unknown>;
   loadPackage: (packages: string[]) => Promise<void>;
   pyimport: (module: string) => unknown;
+  FS?: {
+    writeFile: (path: string, data: Uint8Array) => void;
+  };
   toPy: (value: unknown) => unknown;
   globals: {
     set: (key: string, value: unknown) => void;

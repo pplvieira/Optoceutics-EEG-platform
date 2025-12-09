@@ -7,24 +7,27 @@
 import React, { useState } from 'react';
 import type { AnalysisParameters } from '../../types/analysis';
 
+type SSVEPParams = {
+  target_frequency: number;
+  pca_components: number;
+  frequency_bands: number[];
+};
+
+type AdvancedPSDSettings = {
+  nperseg_seconds: number;
+  noverlap_proportion: number;
+  window: 'hann' | 'boxcar';
+  use_db: boolean;
+};
+
 interface AnalysisControlsProps {
-  ssvepParams: {
-    target_frequency: number;
-    pca_components: number;
-    frequency_bands: number[];
-  };
+  ssvepParams: SSVEPParams;
   analysisParams: AnalysisParameters;
-  advancedPSDSettings: {
-    nperseg_seconds: number;
-    noverlap_proportion: number;
-    window: 'hann' | 'boxcar';
-    use_db: boolean;
-  };
-  metadata: { channel_names: string[]; duration_seconds: number } | null;
+  advancedPSDSettings: AdvancedPSDSettings;
   isAnalyzing: boolean;
-  onSSVEPParamsChange: (params: typeof ssvepParams) => void;
+  onSSVEPParamsChange: (params: SSVEPParams) => void;
   onAnalysisParamsChange: (params: AnalysisParameters) => void;
-  onAdvancedPSDSettingsChange: (settings: typeof advancedPSDSettings) => void;
+  onAdvancedPSDSettingsChange: (settings: AdvancedPSDSettings) => void;
   onRunSSVEP: () => void;
   onRunAnalysis: (type: string) => void;
 }
@@ -33,7 +36,6 @@ export default function AnalysisControls({
   ssvepParams,
   analysisParams,
   advancedPSDSettings,
-  metadata,
   isAnalyzing,
   onSSVEPParamsChange,
   onAnalysisParamsChange,
@@ -42,6 +44,10 @@ export default function AnalysisControls({
   onRunAnalysis
 }: AnalysisControlsProps) {
   const [showAdvancedPSDSettings, setShowAdvancedPSDSettings] = useState(false);
+
+  const baseRaw = analysisParams.raw_signal ?? { duration: 10, start_time: 0 };
+  const basePsd = analysisParams.psd ?? { fmin: 0.5, fmax: 50, method: 'welch' as const };
+  const baseSnr = analysisParams.snr ?? { fmin: 0.5, fmax: 50, method: 'welch' as const };
 
   return (
     <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
@@ -103,10 +109,10 @@ export default function AnalysisControls({
             <label className="block text-sm font-medium mb-1">Duration (s):</label>
             <input
               type="number"
-              value={analysisParams.raw_signal?.duration || 10}
+              value={baseRaw.duration || 10}
               onChange={(e) => onAnalysisParamsChange({
                 ...analysisParams,
-                raw_signal: { ...analysisParams.raw_signal, duration: parseFloat(e.target.value) }
+                raw_signal: { ...baseRaw, duration: parseFloat(e.target.value) }
               })}
               min="0.1"
               step="0.1"
@@ -117,10 +123,10 @@ export default function AnalysisControls({
             <label className="block text-sm font-medium mb-1">Start Time (s):</label>
             <input
               type="number"
-              value={analysisParams.raw_signal?.start_time || 0}
+              value={baseRaw.start_time || 0}
               onChange={(e) => onAnalysisParamsChange({
                 ...analysisParams,
-                raw_signal: { ...analysisParams.raw_signal, start_time: parseInt(e.target.value) }
+                raw_signal: { ...baseRaw, start_time: parseInt(e.target.value) }
               })}
               min="0"
               className="w-full p-2 border border-gray-300 rounded text-sm"
@@ -147,10 +153,10 @@ export default function AnalysisControls({
                 <label className="block text-sm font-medium mb-1">Min Freq (Hz):</label>
                 <input
                   type="number"
-                  value={analysisParams.psd?.fmin || 0.5}
+                  value={basePsd.fmin || 0.5}
                   onChange={(e) => onAnalysisParamsChange({
                     ...analysisParams,
-                    psd: { ...analysisParams.psd, fmin: parseFloat(e.target.value) }
+                    psd: { ...basePsd, fmin: parseFloat(e.target.value) }
                   })}
                   step="0.1"
                   min="0"
@@ -161,10 +167,10 @@ export default function AnalysisControls({
                 <label className="block text-sm font-medium mb-1">Max Freq (Hz):</label>
                 <input
                   type="number"
-                  value={analysisParams.psd?.fmax || 50}
+                  value={basePsd.fmax || 50}
                   onChange={(e) => onAnalysisParamsChange({
                     ...analysisParams,
-                    psd: { ...analysisParams.psd, fmax: parseFloat(e.target.value) }
+                    psd: { ...basePsd, fmax: parseFloat(e.target.value) }
                   })}
                   step="0.1"
                   min="1"
@@ -177,10 +183,10 @@ export default function AnalysisControls({
                   <button
                     onClick={() => onAnalysisParamsChange({
                       ...analysisParams,
-                      psd: { ...analysisParams.psd, method: 'welch' }
+                      psd: { ...basePsd, method: 'welch' }
                     })}
-                    className={`flex-1 px-3 py-1 rounded-md text-sm font-medium transition-colors ${
-                      analysisParams.psd?.method === 'welch'
+                  className={`flex-1 px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                    basePsd.method === 'welch'
                         ? 'bg-brand-blue text-white shadow-sm'
                         : 'text-brand-med-gray hover:bg-brand-light-gray'
                     }`}
@@ -190,10 +196,10 @@ export default function AnalysisControls({
                   <button
                     onClick={() => onAnalysisParamsChange({
                       ...analysisParams,
-                      psd: { ...analysisParams.psd, method: 'periodogram' }
+                      psd: { ...basePsd, method: 'periodogram' }
                     })}
-                    className={`flex-1 px-3 py-1 rounded-md text-sm font-medium transition-colors ${
-                      analysisParams.psd?.method === 'periodogram'
+                  className={`flex-1 px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                    basePsd.method === 'periodogram'
                         ? 'bg-brand-blue text-white shadow-sm'
                         : 'text-brand-med-gray hover:bg-brand-light-gray'
                     }`}
@@ -346,10 +352,10 @@ export default function AnalysisControls({
             <label className="block text-sm font-medium mb-1">Min Freq (Hz):</label>
             <input
               type="number"
-              value={analysisParams.snr?.fmin || 1}
+              value={baseSnr.fmin || 1}
               onChange={(e) => onAnalysisParamsChange({
                 ...analysisParams,
-                snr: { ...analysisParams.snr, fmin: parseFloat(e.target.value) }
+                snr: { ...baseSnr, fmin: parseFloat(e.target.value) }
               })}
               min="0"
               className="w-full p-2 border border-gray-300 rounded text-sm"
@@ -359,10 +365,10 @@ export default function AnalysisControls({
             <label className="block text-sm font-medium mb-1">Max Freq (Hz):</label>
             <input
               type="number"
-              value={analysisParams.snr?.fmax || 40}
+              value={baseSnr.fmax || 40}
               onChange={(e) => onAnalysisParamsChange({
                 ...analysisParams,
-                snr: { ...analysisParams.snr, fmax: parseFloat(e.target.value) }
+                snr: { ...baseSnr, fmax: parseFloat(e.target.value) }
               })}
               min="1"
               className="w-full p-2 border border-gray-300 rounded text-sm"

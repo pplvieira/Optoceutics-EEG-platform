@@ -70,6 +70,10 @@ export interface PatientReportData {
  */
 import type { PyodideInstance } from '../types/pyodide';
 
+interface Micropip {
+  install: (packages: string | string[]) => Promise<void>;
+}
+
 export async function generatePatientReportPDF(
   pyodide: PyodideInstance,
   reportData: PatientReportData
@@ -77,7 +81,7 @@ export async function generatePatientReportPDF(
 
   // Install required packages
   try {
-    const micropip = pyodide.pyimport('micropip');
+    const micropip = pyodide.pyimport('micropip') as Micropip;
     console.log('Installing python-docx, pillow, docx2pdf, and reportlab...');
     await micropip.install(['python-docx', 'pillow', 'docx2pdf', 'reportlab']);
     console.log('Packages installed successfully');
@@ -418,7 +422,7 @@ def generate_patient_report_pdf():
     // Call the function to generate the report
     const result = await pyodide.runPythonAsync(`generate_patient_report_pdf()`);
     console.log('PDF generated successfully!');
-    return result;
+    return result as string;
   } catch (error) {
     console.error('Report generation error:', error);
     throw new Error(`Failed to generate report: ${error}`);
@@ -482,7 +486,7 @@ export async function generatePatientReportDOCX(
 
   // Install required packages
   try {
-    const micropip = pyodide.pyimport('micropip');
+    const micropip = pyodide.pyimport('micropip') as Micropip;
     console.log('Installing python-docx and pillow...');
     await micropip.install(['python-docx', 'pillow']);
     console.log('Packages installed successfully');
@@ -666,7 +670,7 @@ def generate_patient_report_docx():
     await pyodide.runPythonAsync(pythonCode);
     const result = await pyodide.runPythonAsync(`generate_patient_report_docx()`);
     console.log('DOCX generated successfully!');
-    return result;
+    return result as string;
   } catch (error) {
     console.error('Report generation error:', error);
     throw new Error(`Failed to generate report: ${error}`);

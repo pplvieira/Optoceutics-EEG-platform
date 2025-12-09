@@ -5,7 +5,7 @@
 'use client';
 
 import React from 'react';
-import type { EDFMetadata } from '../../hooks/useEDFFile';
+import type { EDFMetadata } from '../../types/edfProcessor';
 
 interface MetadataDisplayProps {
   metadata: EDFMetadata;
