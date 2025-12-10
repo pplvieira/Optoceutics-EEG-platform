@@ -4,6 +4,15 @@
 
 The EEG Platform supports multiple deployment configurations, from simple static hosting to hybrid setups with backend services.
 
+### Latest validation (Dec 2025)
+- Next.js upgraded to **15.5.5/15.5.7** (resolves Vercel vulnerable Next.js notice).
+- Local validation commands (all pass):
+  - `npm run type-check`
+  - `npm run lint` (warnings only, no errors; hook deps/img suggestions intentionally left as-is)
+  - `npm test`
+  - `npm run build`
+- Pre-deploy helper: `npm run validate` (wraps type-check + build).
+
 ---
 
 ## Deployment Options

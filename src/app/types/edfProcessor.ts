@@ -27,6 +27,7 @@ export interface EDFAnnotation {
 }
 
 export interface AnalysisResult {
+  id?: string;
   analysis_type: string;
   plot_base64?: string;
   data?: Record<string, unknown>;

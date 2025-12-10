@@ -246,49 +246,51 @@ export default function Home() {
         </div>
         )}
 
-        {/* Features Overview */}
-        <div className="mt-12 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {currentMode === 'developer' ? (
-            <>
-              <FeatureCard
-                icon="📊"
-                title="Real-time Processing"
-                description="Live EEG signal processing with configurable filters and analysis pipelines."
-                isDarkMode={true}
-              />
-              <FeatureCard
-                icon="🧠"
-                title="Advanced Analytics"
-                description="Machine learning algorithms for pattern recognition and neural state classification."
-                isDarkMode={true}
-              />
-              <FeatureCard
-                icon="📈"
-                title="Data Visualization"
-                description="Interactive charts, spectrograms, and topographical brain maps."
-                isDarkMode={true}
-              />
-            </>
-          ) : (
-            <>
-              <FeatureCard
-                icon="🎯"
-                title="Guided Tasks"
-                description="Structured experiments designed to capture specific neural responses."
-              />
-              <FeatureCard
-                icon="🎮"
-                title="Interactive Games"
-                description="Engaging activities that make participation enjoyable and effective."
-              />
-              <FeatureCard
-                icon="📱"
-                title="User-Friendly"
-                description="Intuitive interface designed for participants of all technical levels."
-              />
-            </>
-          )}
-        </div>
+        {/* Features Overview (hidden in Browser mode) */}
+        {currentMode !== 'browser' && (
+          <div className="mt-12 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {currentMode === 'developer' ? (
+              <>
+                <FeatureCard
+                  icon="📊"
+                  title="Real-time Processing"
+                  description="Live EEG signal processing with configurable filters and analysis pipelines."
+                  isDarkMode={true}
+                />
+                <FeatureCard
+                  icon="🧠"
+                  title="Advanced Analytics"
+                  description="Machine learning algorithms for pattern recognition and neural state classification."
+                  isDarkMode={true}
+                />
+                <FeatureCard
+                  icon="📈"
+                  title="Data Visualization"
+                  description="Interactive charts, spectrograms, and topographical brain maps."
+                  isDarkMode={true}
+                />
+              </>
+            ) : (
+              <>
+                <FeatureCard
+                  icon="🎯"
+                  title="Guided Tasks"
+                  description="Structured experiments designed to capture specific neural responses."
+                />
+                <FeatureCard
+                  icon="🎮"
+                  title="Interactive Games"
+                  description="Engaging activities that make participation enjoyable and effective."
+                />
+                <FeatureCard
+                  icon="📱"
+                  title="User-Friendly"
+                  description="Intuitive interface designed for participants of all technical levels."
+                />
+              </>
+            )}
+          </div>
+        )}
 
         {/* Running Experiment Overlay */}
         {runningExperiment && (

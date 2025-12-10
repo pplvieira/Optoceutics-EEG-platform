@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-disable @typescript-eslint/no-require-imports */
 
 /**
  * Pre-Deployment Validation Script
@@ -6,8 +7,6 @@
  */
 
 const { execSync } = require('child_process');
-const fs = require('fs');
-const path = require('path');
 
 console.log('\n========================================');
 console.log('   PRE-DEPLOYMENT VALIDATION CHECK');
@@ -27,6 +26,7 @@ try {
   }
 } catch (error) {
   console.log('⚠️  Could not check git status\n');
+  console.error(error);
 }
 
 // Step 2: Install dependencies
@@ -36,6 +36,7 @@ try {
   console.log('✓ Dependencies installed\n');
 } catch (error) {
   console.error('✗ npm install failed');
+  console.error(error);
   process.exit(1);
 }
 
@@ -47,6 +48,7 @@ try {
 } catch (error) {
   console.error('✗ TypeScript check failed');
   console.error('Fix the TypeScript errors above before deploying\n');
+  console.error(error);
   hasErrors = true;
 }
 
@@ -58,6 +60,7 @@ try {
 } catch (error) {
   console.error('✗ Build failed');
   console.error('Fix the build errors above before deploying\n');
+  console.error(error);
   hasErrors = true;
 }
 

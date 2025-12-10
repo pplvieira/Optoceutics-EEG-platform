@@ -13,20 +13,30 @@ interface UseAnalysisReturn {
   isAnalyzing: boolean;
   error: string | null;
   progress: number;
+  setIsAnalyzing: (analyzing: boolean) => void; // Expose setter for comparison mode
   runAnalysis: (
     type: AnalysisType,
     parameters: AnalysisParameters,
     pyodide: PyodideInstance,
     selectedChannels: string[],
-    timeFrame?: { start: number; end: number } | null
+    timeFrame?: { start: number; end: number } | null,
+    useResutilStyle?: boolean, // CRITICAL: Read at call time, not from state
+    onSuccess?: (message: string) => void,
+    onError?: (error: string) => void,
+    onLoadingMessage?: (message: string) => void,
+    calculateRealWorldTime?: (onset: number) => string | undefined
   ) => Promise<void>;
   runSSVEPAnalysis: (
     params: { target_frequency: number; pca_components: number; frequency_bands: number[] },
     pyodide: PyodideInstance,
     selectedChannels: string[],
-    timeFrame?: { start: number; end: number } | null
+    timeFrame?: { start: number; end: number } | null,
+    onSuccess?: (message: string) => void,
+    onError?: (error: string) => void,
+    onLoadingMessage?: (message: string) => void
   ) => Promise<void>;
   clearResults: () => void;
+  addResult: (result: AnalysisResult) => void;
 }
 
 export function useAnalysis(): UseAnalysisReturn {
@@ -59,17 +69,29 @@ export function useAnalysis(): UseAnalysisReturn {
     parameters: AnalysisParameters,
     pyodide: PyodideInstance,
     selectedChannels: string[],
-    timeFrame?: { start: number; end: number } | null
+    timeFrame?: { start: number; end: number } | null,
+    useResutilStyle: boolean = false, // CRITICAL: Read at call time
+    onSuccess?: (message: string) => void,
+    onError?: (error: string) => void,
+    onLoadingMessage?: (message: string) => void,
+    calculateRealWorldTime?: (onset: number) => string | undefined
   ) => {
     setIsAnalyzing(true);
     setError(null);
+    onLoadingMessage?.(`Running ${type} analysis...`);
     
     const progressInterval = simulateProgress(3000);
 
     try {
+      // CRITICAL FIX: Merge resutil style into parameters at call time
+      const finalParameters = {
+        ...parameters,
+        use_resutil_style: useResutilStyle // Read from parameter, not state
+      };
+
       // Set parameters in Python
       pyodide.globals.set('analysis_type', type);
-      pyodide.globals.set('parameters', pyodide.toPy(parameters));
+      pyodide.globals.set('parameters', pyodide.toPy(finalParameters));
       pyodide.globals.set('js_selected_channels', selectedChannels);
       
       // Set time frame parameters if enabled
@@ -94,7 +116,9 @@ export function useAnalysis(): UseAnalysisReturn {
           errorMsg += `\n\nPython traceback:\n${parsedResult.traceback}`;
           console.error('Python analysis error:', parsedResult);
         }
-        setError(errorMsg);
+        const finalError = errorMsg;
+        setError(finalError);
+        onError?.(finalError);
         return;
       }
 
@@ -102,18 +126,27 @@ export function useAnalysis(): UseAnalysisReturn {
       if (timeFrame) {
         parsedResult.time_frame = {
           start: timeFrame.start,
-          end: timeFrame.end
+          end: timeFrame.end,
+          start_real_time: calculateRealWorldTime?.(timeFrame.start),
+          end_real_time: calculateRealWorldTime?.(timeFrame.end)
         };
       }
 
+      // Add unique ID for plot selection
+      parsedResult.id = `${type}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
       setAnalysisResults(prev => [...prev, parsedResult]);
+      onSuccess?.(`${type} analysis completed!`);
 
     } catch (err) {
       console.error('Analysis error:', err);
-      setError(`Analysis failed: ${err}`);
+      const errorMsg = `Analysis failed: ${err}`;
+      setError(errorMsg);
+      onError?.(errorMsg);
     } finally {
       clearInterval(progressInterval);
       setIsAnalyzing(false);
+      onLoadingMessage?.('');
       setProgress(100);
       setTimeout(() => setProgress(0), 1000);
     }
@@ -123,10 +156,14 @@ export function useAnalysis(): UseAnalysisReturn {
     params: { target_frequency: number; pca_components: number; frequency_bands: number[] },
     pyodide: PyodideInstance,
     selectedChannels: string[],
-    timeFrame?: { start: number; end: number } | null
+    timeFrame?: { start: number; end: number } | null,
+    onSuccess?: (message: string) => void,
+    onError?: (error: string) => void,
+    onLoadingMessage?: (message: string) => void
   ) => {
     setIsAnalyzing(true);
     setError(null);
+    onLoadingMessage?.('Running comprehensive SSVEP analysis...');
     
     const progressInterval = simulateProgress(8000);
 
@@ -160,17 +197,22 @@ export function useAnalysis(): UseAnalysisReturn {
           console.error('Python SSVEP analysis error:', parsedResult);
         }
         setError(errorMsg);
+        onError?.(errorMsg);
         return;
       }
 
       setSSVEPResult(parsedResult);
+      onSuccess?.('SSVEP analysis completed successfully!');
 
     } catch (err) {
       console.error('SSVEP analysis error:', err);
-      setError(`Analysis failed: ${err}`);
+      const errorMsg = `Analysis failed: ${err}`;
+      setError(errorMsg);
+      onError?.(errorMsg);
     } finally {
       clearInterval(progressInterval);
       setIsAnalyzing(false);
+      onLoadingMessage?.('');
       setProgress(100);
       setTimeout(() => setProgress(0), 1000);
     }
@@ -182,15 +224,21 @@ export function useAnalysis(): UseAnalysisReturn {
     setError(null);
   }, []);
 
+  const addResult = useCallback((result: AnalysisResult) => {
+    setAnalysisResults(prev => [...prev, result]);
+  }, []);
+
   return {
     analysisResults,
     ssvepResult,
     isAnalyzing,
     error,
     progress,
+    setIsAnalyzing,
     runAnalysis,
     runSSVEPAnalysis,
-    clearResults
+    clearResults,
+    addResult
   };
 }
 

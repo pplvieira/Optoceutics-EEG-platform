@@ -57,3 +57,20 @@ export const mockEDFMetadata = {
   annotations: [],
 };
 
+/**
+ * Basic smoke test to ensure the helpers remain callable
+ */
+describe('testUtils helpers', () => {
+  it('creates a mock pyodide instance', () => {
+    const pyodide = createMockPyodide();
+    expect(pyodide.runPython).toBeDefined();
+    expect(pyodide.globals.set).toBeDefined();
+  });
+
+  it('creates a mock EDF file', () => {
+    const file = createMockEDFFile();
+    expect(file.name).toBe('test.edf');
+    expect(file.size).toBeGreaterThan(0);
+  });
+});
+

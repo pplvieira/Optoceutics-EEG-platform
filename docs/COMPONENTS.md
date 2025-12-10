@@ -8,43 +8,74 @@ This document provides detailed documentation for all major components in the EE
 
 ### 1. PyodideEDFProcessor.tsx
 
-**Location:** `app/components/PyodideEDFProcessor.tsx`  
-**Size:** 4,287 lines  
+**Location:** `app/components/edf-processor/PyodideEDFProcessor.tsx`  
+**Size:** ~3,136 lines (reduced from 4,287+ lines)  
 **Purpose:** Main browser-based EDF processing component using Pyodide
 
+#### Refactoring Status
+✅ **Significantly refactored** - Python environment setup extracted, UI components integrated, code modularized
+
 #### Key Features
-- Pyodide initialization and package management
+- Pyodide initialization and package management (via `usePyodide` hook)
 - EDF file reading (supports multiple libraries)
-- Multiple analysis types
+- Multiple analysis types (SSVEP, PSD, SNR, Theta-Beta, Time-Frequency, FOOOF)
 - PDF/DOCX report generation
-- Annotation management
-- Channel renaming
+- Annotation management (via `useAnnotations` hook)
+- Channel renaming (via `useChannelManager` hook)
+- Multi-file management (via `useMultiFileManager` hook)
+- Time frame selection (via `useTimeFrame` hook)
 
 #### Props
 None (self-contained component)
 
+#### Hooks Used
+The component now uses several custom hooks for modularity:
+
+- **`usePyodide`** - Pyodide initialization, Python environment setup, file reloading
+- **`useMultiFileManager`** - Multi-file loading, switching, nickname management
+- **`useAnalysis`** - Analysis execution and results management
+- **`useAnnotations`** - Annotation loading, custom annotation creation
+- **`useChannelManager`** - Channel selection, renaming, display names
+- **`useTimeFrame`** - Time frame selection and validation
+- **`useEDFFile`** - EDF file loading (created but not yet fully integrated)
+
+#### Components Used
+The component uses several sub-components for UI:
+
+- **`FileUpload`** - File upload UI with drag & drop
+- **`MetadataDisplay`** - File metadata display
+- **`ChannelSelector`** - Channel selection UI
+- **`TimeFrameSelector`** - Time frame selection UI
+- **`AnnotationPanel`** - Annotation management UI
+- **`MultiFileListPanel`** - Multi-file list management
+- **`ChannelRenamePopup`** - Channel renaming popup
+- **`PlotSelectionPanel`** - Plot selection for reports
+- **`ReportGenerationPanel`** - Report generation UI
+
 #### State Management
-- `pyodideReady`: Boolean - Pyodide initialization status
-- `currentFile`: File | null - Currently loaded EDF file
-- `metadata`: EDFMetadata | null - Extracted file metadata
-- `analysisResults`: AnalysisResult[] - Array of analysis results
-- `selectedChannels`: string[] - Selected channels for analysis
-- `annotations`: EDFAnnotation[] - File annotations
+State is now managed through hooks:
+- Pyodide state: `usePyodide` hook
+- File state: `useMultiFileManager` hook
+- Analysis state: `useAnalysis` hook
+- Annotation state: `useAnnotations` hook
+- Channel state: `useChannelManager` hook
+- Time frame state: `useTimeFrame` hook
 
 #### Key Functions
 
-##### `initializePyodide()`
-Initializes Pyodide runtime and installs required packages.
+##### Python Environment Setup
+**Now handled by `usePyodide` hook:**
+- `setupPythonEnvironment()` - Sets up Python environment, installs packages, loads modules
+- `reloadActiveFile()` - Transfers active file data to Python environment
 
 **Process:**
 1. Load Pyodide from CDN
-2. Install core packages (NumPy, SciPy, matplotlib, scikit-learn)
-3. Attempt to install pyedflib or MNE-Python
-4. Fallback to pure Python EDF reader if needed
-5. Load custom resutil package
-6. Set up Python helper functions
-
-**Returns:** Promise<void>
+2. Install core packages (NumPy, SciPy, matplotlib, scikit-learn, micropip)
+3. Install EDF libraries (MNE, pyedflib) with fallback to pure Python
+4. Install resutil (multi-stage fallback)
+5. Install FOOOF
+6. Load external Python modules (fooof_analysis.py, comparison_psd.py, edf_analysis_code.py, resutil_oc.py)
+7. Set up Python helper functions (~1860 lines of Python code)
 
 ##### `handleFileSelect(file: File)`
 Processes selected EDF file.
@@ -53,7 +84,7 @@ Processes selected EDF file.
 1. Validate file type (.edf, .bdf, .fif)
 2. Read file as ArrayBuffer
 3. Convert to Uint8Array
-4. Pass to Pyodide
+4. Pass to Pyodide via `reloadActiveFile()`
 5. Execute Python EDF reading function
 6. Extract metadata
 7. Update component state
@@ -61,8 +92,8 @@ Processes selected EDF file.
 **Parameters:**
 - `file`: File - The EDF file to process
 
-##### `performAnalysis(analysisType: string, parameters: object)`
-Executes analysis on loaded file.
+##### `runTraditionalAnalysis(analysisType: string)`
+Executes traditional analysis on loaded file.
 
 **Supported Analysis Types:**
 - `raw_signal`: Plot raw EEG signal
@@ -70,13 +101,23 @@ Executes analysis on loaded file.
 - `snr`: Signal-to-Noise Ratio
 - `theta_beta_ratio`: Theta/Beta ratio calculation
 - `time_frequency`: Time-frequency analysis
-- `ssvep`: SSVEP detection
+- `fooof`: FOOOF spectral parameterization
 
 **Parameters:**
 - `analysisType`: string - Type of analysis to perform
-- `parameters`: object - Analysis-specific parameters
 
-**Returns:** Promise<AnalysisResult>
+**Returns:** Promise<void> (results stored in `useAnalysis` hook state)
+
+##### `runSSVEPAnalysis()`
+Executes comprehensive SSVEP analysis.
+
+**Process:**
+1. Validates file and channels
+2. Calls Python SSVEP analysis function
+3. Processes results (40Hz detection, PCA, SNR, frequency bands)
+4. Updates SSVEP results state
+
+**Returns:** Promise<void> (results stored in `useAnalysis` hook state)
 
 #### Analysis Parameters
 

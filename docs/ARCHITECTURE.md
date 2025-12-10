@@ -52,17 +52,32 @@ The EEG Platform implements a **hybrid multi-architecture** design that supports
 - ⚠️ **Initial Load Time**: 30-90 seconds first load
 - ⚠️ **Memory Intensive**: Can use 500MB+ for large files
 
-**File Flow:**
-1. User selects EDF file via file input
+**File Flow (Refactored):**
+1. User selects EDF file via `FileUpload` component
 2. File read as `ArrayBuffer` in JavaScript
 3. Converted to `Uint8Array`
-4. Passed to Pyodide via `globals.set()`
-5. Python converts to `bytes` object
-6. EDF library reads file (pyedflib/MNE/pure Python)
-7. Analysis executed in Python
-8. Results serialized to JSON
-9. Plots encoded as base64 PNG
-10. React components render results
+4. `useMultiFileManager` hook manages file state
+5. `reloadActiveFile()` from `usePyodide` hook transfers file to Python
+6. Python converts to `bytes` object
+7. EDF library reads file (pyedflib/MNE/pure Python)
+8. Analysis executed via `useAnalysis` hook
+9. Results serialized to JSON
+10. Plots encoded as base64 PNG
+11. React components render results via `ResultsDisplay` component
+
+**Python Environment Setup Flow:**
+1. `usePyodide` hook initializes Pyodide runtime
+2. `setupPythonEnvironment()` installs packages:
+   - Core: NumPy, SciPy, matplotlib, scikit-learn, micropip
+   - EDF libraries: MNE, pyedflib (with pure Python fallback)
+   - Custom: resutil (multi-stage fallback), FOOOF
+3. External Python modules loaded:
+   - `fooof_analysis.py`
+   - `comparison_psd.py`
+   - `edf_analysis_code.py` (~1860 lines of Python code)
+   - `resutil_oc.py`
+4. Python helper functions set up in global scope
+5. Component ready for analysis
 
 ### 2. Local Backend Mode (Optional)
 
@@ -282,21 +297,113 @@ Visualization Display
 ## State Management
 
 ### Current Approach
+- **Custom React Hooks** for modular state management
 - React `useState` hooks for local component state
 - No global state management library
-- Props drilling for shared state
+- Props drilling minimized through hook composition
 - In-memory database for experiments (`experimentDatabase.ts`)
 
-### State Structure Example (PyodideEDFProcessor)
+### Modular Hook Architecture
+
+The application uses a **hook-based architecture** for state management and logic separation:
+
+#### Core Hooks
+
+**`usePyodide`** - Pyodide Runtime Management
+- Manages Pyodide initialization
+- Handles Python environment setup
+- Manages package installation
+- Provides file reloading functionality
+
+**`useMultiFileManager`** - Multi-File Management
+- Manages multiple loaded EDF files
+- Handles file switching and selection
+- Manages file nicknames
+- Provides current file and metadata access
+
+**`useAnalysis`** - Analysis Execution
+- Manages analysis execution
+- Stores analysis results
+- Tracks analysis progress
+- Handles analysis errors
+
+**`useAnnotations`** - Annotation Management
+- Loads annotations from EDF files
+- Manages custom annotations
+- Handles annotation updates
+- Calculates real-world time
+
+**`useChannelManager`** - Channel Management
+- Manages channel selection
+- Handles channel renaming
+- Provides display name mapping
+- Supports modified EDF download
+
+**`useTimeFrame`** - Time Frame Selection
+- Manages time frame start/end
+- Validates time ranges
+- Calculates durations
+- Converts to real-world time
+
+**`useEDFFile`** - EDF File Loading (Created, pending integration)
+- Handles EDF file reading
+- Extracts metadata
+- Manages file state
+
+### State Structure Example (PyodideEDFProcessor - Refactored)
 
 ```typescript
-// File state
-const [currentFile, setCurrentFile] = useState<File | null>(null);
-const [metadata, setMetadata] = useState<EDFMetadata | null>(null);
+// Pyodide state (via usePyodide hook)
+const {
+  pyodide,
+  pyodideReady,
+  pyodideLoading,
+  setupPythonEnvironment,
+  reloadActiveFile
+} = usePyodide();
 
-// Pyodide state
-const [pyodideReady, setPyodideReady] = useState(false);
-const [pyodideLoading, setPyodideLoading] = useState(false);
+// File state (via useMultiFileManager hook)
+const {
+  loadedFiles,
+  activeFileId,
+  currentFile,
+  metadata,
+  switchToFile,
+  removeFile
+} = useMultiFileManager();
+
+// Analysis state (via useAnalysis hook)
+const {
+  analysisResults,
+  ssvepResult,
+  isAnalyzing,
+  runAnalysis,
+  runSSVEPAnalysis
+} = useAnalysis();
+
+// Annotation state (via useAnnotations hook)
+const {
+  annotations,
+  addCustomAnnotation,
+  updateAnnotation
+} = useAnnotations();
+
+// Channel state (via useChannelManager hook)
+const {
+  selectedChannels,
+  channelRenameMap,
+  renameChannel,
+  getDisplayName
+} = useChannelManager();
+
+// Time frame state (via useTimeFrame hook)
+const {
+  timeFrameStart,
+  timeFrameEnd,
+  useTimeFrame,
+  setTimeFrameStart,
+  setTimeFrameEnd
+} = useTimeFrame(metadata?.duration_seconds || 0);
 
 // Analysis state
 const [analysisResults, setAnalysisResults] = useState<AnalysisResult[]>([]);

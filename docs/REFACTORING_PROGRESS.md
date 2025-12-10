@@ -25,20 +25,47 @@ This document tracks the progress of the comprehensive refactoring plan implemen
 
 ### Phase 2: Component Refactoring ✅
 
-**Status:** Completed - Hooks and Sub-components Created
+**Status:** In Progress - Hooks and Sub-components Created and Partially Integrated
 
 **Actions Taken:**
-- Created `usePyodide` hook for Pyodide initialization
-- Created `useEDFFile` hook for EDF file management
-- Created `useAnalysis` hook for analysis execution
-- Created sub-components:
+- ✅ Created `usePyodide` hook for Pyodide initialization
+- ✅ Created `useEDFFile` hook for EDF file management
+- ✅ Created `useAnalysis` hook for analysis execution
+- ✅ Created `useMultiFileManager` hook for multi-file management
+- ✅ Created `useAnnotations` hook for annotation management
+- ✅ Created `useChannelManager` hook for channel management
+- ✅ Created `useTimeFrame` hook for time frame management
+- ✅ Created sub-components:
   - `FileUpload.tsx` - File upload UI
   - `MetadataDisplay.tsx` - File metadata display
   - `ChannelSelector.tsx` - Channel selection UI
   - `AnalysisControls.tsx` - Analysis parameter controls
   - `ResultsDisplay.tsx` - Results visualization
+  - `TimeFrameSelector.tsx` - Time frame selection UI
+  - `AnnotationPanel.tsx` - Annotation management UI
+  - `MultiFileListPanel.tsx` - Multi-file list management
 
-**Note:** The main `PyodideEDFProcessor.tsx` component (4282 lines) still needs to be refactored to use these new hooks and components. This is a large task that can be done incrementally.
+**Integration Status:**
+- ✅ `usePyodide` - Fully integrated (Python environment setup extracted)
+- ✅ `useMultiFileManager` - Fully integrated
+- ✅ `useAnnotations` - Fully integrated
+- ✅ `useChannelManager` - Fully integrated
+- ✅ `useTimeFrame` - Fully integrated
+- ✅ `FileUpload` - Fully integrated
+- ✅ `MetadataDisplay` - Fully integrated
+- ✅ `ChannelSelector` - Fully integrated
+- ✅ `TimeFrameSelector` - Fully integrated
+- ✅ `AnnotationPanel` - Fully integrated
+- ✅ `MultiFileListPanel` - Fully integrated
+- ⚠️ `useEDFFile` - Created but not yet integrated (component uses custom file handling)
+- ⚠️ `useAnalysis` - Created but not yet integrated (component uses custom analysis functions)
+- ⚠️ `AnalysisControls` - Created but not fully integrated (doesn't support all analysis types)
+- ⚠️ `ResultsDisplay` - Created but not yet integrated (component uses custom render functions)
+
+**Component Size Reduction:**
+- Before: 4,282+ lines
+- After: ~3,136 lines
+- Reduction: ~1,146 lines (26.8% reduction)
 
 ### Phase 3: Type Safety ✅
 
@@ -80,11 +107,62 @@ This document tracks the progress of the comprehensive refactoring plan implemen
   - `edfService.ts` - EDF file operations
 - Hooks created for reusable logic
 
+## Completed Phases (Continued)
+
+### Phase 9: Extract Python Environment Setup ✅
+
+**Status:** Completed
+
+**Actions Taken:**
+- Extracted comprehensive Python environment setup from `PyodideEDFProcessor.tsx` to `usePyodide` hook
+- Moved ~1860 lines of Python code to `getPythonAnalysisCode()` function in hook
+- Implemented `setupPythonEnvironment()` function in hook:
+  - Handles MNE, pyedflib, resutil, FOOOF installation
+  - Multi-stage fallback for resutil installation
+  - Loads external Python modules (fooof_analysis.py, comparison_psd.py, edf_analysis_code.py, resutil_oc.py)
+- Implemented `reloadActiveFile()` function for transferring file data to Python
+- Component now uses hook functions instead of inline setup
+
+**Files Modified:**
+- `src/app/hooks/usePyodide.ts` - Added Python setup functions
+- `src/app/components/edf-processor/PyodideEDFProcessor.tsx` - Removed Python setup code
+
+### Phase 10: Replace UI Components ✅
+
+**Status:** Partially Completed
+
+**Actions Taken:**
+- ✅ Replaced inline annotation UI with `AnnotationPanel` component
+- ✅ Removed legacy inline time frame UI (already using `TimeFrameSelector`)
+- ✅ Using existing UI components: `FileUpload`, `MetadataDisplay`, `ChannelSelector`, `MultiFileListPanel`
+- ⚠️ Analysis controls still inline (needs `AnalysisControls` enhancement)
+- ⚠️ Results display still uses custom functions (needs `ResultsDisplay` integration)
+
+**Files Modified:**
+- `src/app/components/edf-processor/PyodideEDFProcessor.tsx` - Replaced inline UI with components
+
+### Phase 12: Cleanup and Type Safety ✅
+
+**Status:** Completed
+
+**Actions Taken:**
+- Removed duplicate imports
+- Fixed syntax errors from legacy code removal
+- Removed orphaned legacy code blocks
+- Cleaned up unused code
+- All TypeScript type checking passes
+- All linting passes (0 errors)
+
+**Testing Results:**
+- ✅ `npm run type-check` - Pass (0 errors)
+- ✅ `npm run lint` - Pass (0 errors, 57 warnings)
+- ✅ `npm test` - Pass (2 tests)
+
 ## Remaining Phases
 
 ### Phase 6: Testing Infrastructure
 
-**Status:** Not Started
+**Status:** Partially Complete
 
 **Planned Actions:**
 - Install testing dependencies (Jest, React Testing Library)
