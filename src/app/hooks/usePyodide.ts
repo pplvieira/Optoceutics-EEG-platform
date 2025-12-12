@@ -73,13 +73,13 @@ export function usePyodide(): UsePyodideReturn {
         'micropip'
       ]);
 
-      // Try to install EDF libraries
+      // Try to install EDF libraries (MNE)
       setLoadingMessage('Installing EDF processing libraries...');
       let library: EDFLibrary = false;
 
       try {
         const micropip = pyodideInstance.pyimport('micropip') as {
-          install: (packages: string[]) => Promise<void>;
+          install: (packages: string | string[]) => Promise<void>;
         };
 
         // Try MNE first
@@ -88,22 +88,13 @@ export function usePyodide(): UsePyodideReturn {
           await micropip.install(['mne']);
           setLoadingMessage('MNE-Python installed successfully');
           library = 'mne';
-        } catch {
-          console.warn('MNE not available, trying pyedflib...');
-          // Fallback to pyedflib
-          try {
-            setLoadingMessage('Installing pyedflib...');
-            await micropip.install(['pyedflib']);
-            setLoadingMessage('pyedflib installed successfully');
-            library = 'pyedflib';
-          } catch {
-            console.warn('Neither MNE nor pyedflib available, using pure Python EDF reader');
-            setLoadingMessage('Using built-in pure Python EDF reader');
-            library = 'pure';
-          }
+        } catch (errMne) {
+          console.warn('MNE install failed:', errMne);
+          library = 'pure';
+          setLoadingMessage('Using built-in pure Python EDF reader');
         }
-      } catch {
-        console.warn('Package installation failed, using pure Python EDF reader');
+      } catch (err) {
+        console.warn('Package installation failed, using pure Python EDF reader', err);
         setLoadingMessage('Using built-in pure Python EDF reader');
         library = 'pure';
       }
@@ -157,7 +148,7 @@ export function usePyodide(): UsePyodideReturn {
     }
   ) => {
     const { setLoadingMessage, setSuccess, setError } = callbacks;
-    let edf_library_available: 'mne' | 'pyedflib' | false = false;
+    let edf_library_available: 'mne' | false = false;
     
     try {
       setLoadingMessage('Setting up analysis environment...');
@@ -171,20 +162,10 @@ export function usePyodide(): UsePyodideReturn {
         await micropip.install(['mne']);
         setLoadingMessage('MNE-Python installed successfully');
         edf_library_available = 'mne';
-      } catch {
-        console.warn('MNE not available, trying pyedflib...');
-        
-        // Fallback to pyedflib
-        try {
-          setLoadingMessage('Installing pyedflib...');
-          await micropip.install(['pyedflib']);
-          setLoadingMessage('pyedflib installed successfully');
-          edf_library_available = 'pyedflib';
-        } catch {
-          console.warn('Neither MNE nor pyedflib available, using pure Python EDF reader');
-          setLoadingMessage('Using built-in pure Python EDF reader');
-          edf_library_available = false;
-        }
+      } catch (e) {
+        console.warn('MNE not available, using pure Python EDF reader', e);
+        setLoadingMessage('Using built-in pure Python EDF reader');
+        edf_library_available = false;
       }
     } catch (error) {
       console.warn('Package installation failed, using pure Python EDF reader', error);
@@ -393,20 +374,9 @@ print("✓ Resutil loaded successfully with lightweight plotlib module (Stage 3:
     try {
       setLoadingMessage('Setting up analysis environment...');
       
-      // Import the Python code string - this will be the complete analysis environment
-      // For now, we'll fetch it from a helper or include it directly
-      // The Python code includes: PureEDFReader, read_edf_file, all analysis functions, etc.
-      const pythonCodeResponse = await fetch('/python-packages/edf_analysis_code.py');
-      let pythonCode: string;
-      
-      if (pythonCodeResponse.ok) {
-        pythonCode = await pythonCodeResponse.text();
-      } else {
-        // Fallback: Include the Python code inline (extracted from component)
-        // This is a large string (1860 lines) - in production, consider extracting to a separate file
-        pythonCode = getPythonAnalysisCode();
-      }
-      
+      // Import the Python code string - prefer inline to avoid 404 noise in dev
+      // If we later add /python-packages/edf_analysis_code.py to public, we can switch back to fetch.
+      const pythonCode = getPythonAnalysisCode();
       await pyodideInstance.runPython(pythonCode);
       
       setSuccess('Python environment loaded successfully!');
@@ -2302,6 +2272,12 @@ print("Python EDF analysis environment ready!")
     if (!activeFileId) return;
     const activeFile = loadedFiles.find(f => f.id === activeFileId);
     if (!activeFile) return;
+
+    // Skip reloading for BDF files that have already been processed in-memory
+    if (activeFile.metadata.convertedFromBdf) {
+      console.log('[BDF][SKIP] Skipping reload for BDF-processed file:', activeFile.metadata.filename);
+      return;
+    }
 
     try {
       // Read file as bytes

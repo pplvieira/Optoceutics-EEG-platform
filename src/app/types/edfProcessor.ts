@@ -15,6 +15,7 @@ export interface EDFMetadata {
   library_used?: string;
   real_data?: boolean;
   annotations?: EDFAnnotation[];
+  convertedFromBdf?: boolean;
 }
 
 export interface EDFAnnotation {
@@ -35,6 +36,7 @@ export interface AnalysisResult {
   message?: string;
   success: boolean;
   error?: string;
+  filename?: string;
   time_frame?: {
     start: number;
     end: number;

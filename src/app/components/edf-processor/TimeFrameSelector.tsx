@@ -25,6 +25,7 @@ interface TimeFrameSelectorProps {
   onUseTimeFrameChange: (value: boolean) => void;
   formatTimeHMS: (time: number) => string | undefined;
   annotations?: EDFAnnotation[];
+  onJumpToAnnotation?: (onset: number) => void;
 }
 
 export default function TimeFrameSelector({
@@ -36,12 +37,11 @@ export default function TimeFrameSelector({
   onTimeFrameEndChange,
   onUseTimeFrameChange,
   formatTimeHMS,
-  annotations = []
+  annotations = [],
+  onJumpToAnnotation
 }: TimeFrameSelectorProps) {
   const timelineRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  if (!duration) return null;
 
   // Draw timeline with annotations
   useEffect(() => {
@@ -55,85 +55,33 @@ export default function TimeFrameSelector({
     const height = canvas.height;
 
     // Clear canvas
-    ctx.fillStyle = '#f3f4f6';
-    ctx.fillRect(0, 0, width, height);
+    ctx.clearRect(0, 0, width, height);
 
-    // Draw timeline bar
+    // Base bar
     const barHeight = 8;
     const barY = height / 2 - barHeight / 2;
     ctx.fillStyle = '#e5e7eb';
     ctx.fillRect(0, barY, width, barHeight);
 
-    // Draw selected range
+    // Selected range
     const startPercent = (timeFrameStart / duration) * 100;
     const endPercent = (timeFrameEnd / duration) * 100;
     const rangeWidth = ((endPercent - startPercent) / 100) * width;
     const rangeX = (startPercent / 100) * width;
-    
-    ctx.fillStyle = '#3b82f6';
+
+    ctx.fillStyle = 'rgba(0,45,95,0.25)'; // brand navy tint
     ctx.fillRect(rangeX, barY, rangeWidth, barHeight);
 
-    // Draw time markers
-    ctx.strokeStyle = '#6b7280';
-    ctx.lineWidth = 1;
-    ctx.font = '10px sans-serif';
-    ctx.fillStyle = '#6b7280';
-    ctx.textAlign = 'center';
-
-    const numMarkers = 10;
-    for (let i = 0; i <= numMarkers; i++) {
-      const x = (i / numMarkers) * width;
-      const time = (i / numMarkers) * duration;
-
-      ctx.beginPath();
-      ctx.moveTo(x, barY - 5);
-      ctx.lineTo(x, barY + barHeight + 5);
-      ctx.stroke();
-
-      ctx.fillText(time.toFixed(1) + 's', x, barY - 10);
-    }
-
-    // Draw annotation markers
-    annotations.forEach(annotation => {
+    // Annotation markers as thin gold bars
+    const sortedAnnotations = [...annotations].sort((a, b) => a.onset - b.onset);
+    sortedAnnotations.forEach((annotation) => {
       const annotationPercent = (annotation.onset / duration) * 100;
       const x = (annotationPercent / 100) * width;
-
       if (x >= 0 && x <= width) {
-        ctx.fillStyle = '#ef4444';
-        ctx.beginPath();
-        ctx.arc(x, height / 2, 6, 0, 2 * Math.PI);
-        ctx.fill();
-
-        // Draw label
-        ctx.fillStyle = '#1f2937';
-        ctx.font = '9px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText(annotation.description || 'Annotation', x, height / 2 - 12);
+        ctx.fillStyle = 'rgba(212, 164, 57, 0.9)'; // brand gold
+        ctx.fillRect(x - 1, barY - 6, 2, barHeight + 12);
       }
     });
-
-    // Draw slider handles
-    const handleSize = 12;
-    const startX = (startPercent / 100) * width;
-    const endX = (endPercent / 100) * width;
-
-    // Start handle
-    ctx.fillStyle = '#2563eb';
-    ctx.beginPath();
-    ctx.arc(startX, height / 2, handleSize / 2, 0, 2 * Math.PI);
-    ctx.fill();
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    // End handle
-    ctx.fillStyle = '#2563eb';
-    ctx.beginPath();
-    ctx.arc(endX, height / 2, handleSize / 2, 0, 2 * Math.PI);
-    ctx.fill();
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 2;
-    ctx.stroke();
   }, [duration, timeFrameStart, timeFrameEnd, useTimeFrame, annotations]);
 
   const handleSliderStart = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -145,6 +93,10 @@ export default function TimeFrameSelector({
     const value = parseFloat(e.target.value);
     onTimeFrameEndChange(Math.max(timeFrameStart + 0.1, Math.min(value, duration)));
   };
+
+  const sortedAnnotations = [...annotations].sort((a, b) => a.onset - b.onset);
+
+  if (!duration) return null;
 
   return (
     <div className="bg-white rounded-lg shadow-lg p-4 mb-4">
@@ -168,10 +120,51 @@ export default function TimeFrameSelector({
             <canvas
               ref={canvasRef}
               width={800}
-              height={80}
-              className="w-full h-20 border border-gray-300 rounded"
+              height={72}
+              className="w-full h-[72px]"
             />
           </div>
+
+          {/* Jump to annotation */}
+          {sortedAnnotations.length > 0 && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Jump to annotation
+                </label>
+                <select
+                  onChange={(e) => {
+                    const target = sortedAnnotations.find((a) => a.id === e.target.value);
+                    if (target) {
+                      const newStart = Math.min(target.onset, duration - 0.1);
+                      const currentSpan = timeFrameEnd - timeFrameStart;
+                      const suggestedEnd = Math.min(duration, newStart + Math.max(0.1, currentSpan));
+                      onTimeFrameStartChange(newStart);
+                      onTimeFrameEndChange(Math.max(suggestedEnd, newStart + 0.1));
+                      onJumpToAnnotation?.(target.onset);
+                    }
+                  }}
+                  defaultValue=""
+                  className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-[var(--brand-navy)] text-sm"
+                >
+                  <option value="">Select annotation...</option>
+                  {sortedAnnotations.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {`${formatTimeHMS ? formatTimeHMS(a.onset) : `${a.onset.toFixed(2)}s`} • ${a.description || 'Annotation'}`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-end text-sm text-gray-600">
+                <div>
+                  <div className="font-semibold text-gray-700">Selected range</div>
+                  <div>
+                    {timeFrameStart.toFixed(2)}s → {timeFrameEnd.toFixed(2)}s ({(timeFrameEnd - timeFrameStart).toFixed(1)}s)
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Range sliders */}
           <div className="space-y-4">
@@ -193,7 +186,7 @@ export default function TimeFrameSelector({
                 onChange={handleSliderStart}
                 className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
                 style={{
-                  background: `linear-gradient(to right, #3b82f6 0%, #3b82f6 ${(timeFrameStart / duration) * 100}%, #e5e7eb ${(timeFrameStart / duration) * 100}%, #e5e7eb 100%)`
+                  background: `linear-gradient(to right, rgba(0,45,95,0.35) 0%, rgba(0,45,95,0.35) ${(timeFrameStart / duration) * 100}%, #e5e7eb ${(timeFrameStart / duration) * 100}%, #e5e7eb 100%)`
                 }}
               />
             </div>
@@ -216,7 +209,7 @@ export default function TimeFrameSelector({
                 onChange={handleSliderEnd}
                 className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
                 style={{
-                  background: `linear-gradient(to right, #e5e7eb 0%, #e5e7eb ${(timeFrameEnd / duration) * 100}%, #3b82f6 ${(timeFrameEnd / duration) * 100}%, #3b82f6 100%)`
+                  background: `linear-gradient(to right, #e5e7eb 0%, #e5e7eb ${(timeFrameEnd / duration) * 100}%, rgba(0,45,95,0.35) ${(timeFrameEnd / duration) * 100}%, rgba(0,45,95,0.35) 100%)`
                 }}
               />
             </div>

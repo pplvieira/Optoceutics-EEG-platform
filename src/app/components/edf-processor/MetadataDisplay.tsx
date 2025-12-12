@@ -13,7 +13,7 @@ interface MetadataDisplayProps {
 
 export default function MetadataDisplay({ metadata }: MetadataDisplayProps) {
   return (
-    <div className="bg-[var(--brand-blue)]/5 rounded-lg p-6 mb-6 border border-[var(--brand-blue)]/10">
+    <div className="bg-white rounded-lg p-6 mb-6 border border-[var(--brand-blue)]/10">
       <h3 className="text-lg font-semibold mb-4">File Information: {metadata.filename}</h3>
       
       {/* Library information */}

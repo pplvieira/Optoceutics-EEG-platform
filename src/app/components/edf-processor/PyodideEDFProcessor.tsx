@@ -117,10 +117,37 @@ export default function PyodideEDFProcessor() {
       setError(analysisError);
     }
   }, [analysisError]);
+
+  // Toast notifications for new analysis results
+  useEffect(() => {
+    if (analysisResults.length > prevResultsCountRef.current) {
+      const latest = analysisResults[analysisResults.length - 1];
+      if (latest?.id) {
+        setToast({
+          type: 'success',
+          message: `${latest.analysis_type.replace('_', ' ')} plot ready`,
+          action: {
+            label: 'View Plot',
+            onClick: () => {
+              setToast(null);
+              const element = document.getElementById(`analysis-result-${latest.id}`);
+              if (element) {
+                element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }
+            }
+          }
+        });
+      }
+    }
+    prevResultsCountRef.current = analysisResults.length;
+  }, [analysisResults]);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [loadingMessage, setLoadingMessage] = useState<string>('');
   const [toast, setToast] = useState<{ message: string; type: 'info' | 'warning' | 'success' | 'error'; action?: { label: string; onClick: () => void } } | null>(null);
+
+  // Track previous analysis results count for toast notifications
+  const prevResultsCountRef = useRef(analysisResults.length);
   
   // Combine Pyodide loading message with analysis loading message
   const displayLoadingMessage = loadingMessage || pyodideLoadingMessage;
@@ -547,11 +574,10 @@ export_modified_edf()
 
   // Progress simulation is handled by useAnalysis hook
 
-  // Helper: convert BDF to EDF using the hook
+  // Helper: convert BDF to EDF using the hook (deprecated)
   const convertBdfToEdf = useCallback(async (fileName: string, fileBytes: Uint8Array) => {
-    if (!pyodide) return { success: false, error: 'Pyodide not ready' };
-    return await convertBdfToEdfFromHook(fileName, fileBytes, pyodide);
-  }, [pyodide, convertBdfToEdfFromHook]);
+    return { success: false, error: 'BDF conversion deprecated - use in-memory processing' };
+  }, []);
 
   // Helper function to add a file to the loaded files array
   const addFile = useCallback(async (file: File): Promise<boolean> => {
@@ -592,6 +618,12 @@ export_modified_edf()
                   if (parsedResult.duration_seconds) {
                     setTimeFrameStart(0);
                     setTimeFrameEnd(parsedResult.duration_seconds);
+                  }
+                  // FIX: Set annotations for BDF files (was missing!)
+                  if (parsedResult.annotations && parsedResult.annotations.length > 0) {
+                    setAnnotations(parsedResult.annotations);
+                  } else {
+                    setAnnotations([]);
                   }
                   resolve(true);
                 } else {
@@ -683,15 +715,13 @@ export_modified_edf()
     const targetFile = switchToFileHook(fileId);
     if (!targetFile) return;
 
-    // Update UI state for the new file
+    // Update UI state for the new file - keep current time frame settings
     if (targetFile.metadata.channel_names && targetFile.metadata.channel_names.length > 0) {
       setSelectedChannels(targetFile.metadata.channel_names);
     }
 
-    if (targetFile.metadata.duration_seconds) {
-      setTimeFrameEnd(targetFile.metadata.duration_seconds);
-      setTimeFrameStart(0);
-    }
+    // DON'T reset time frame when switching files - keep current settings
+    // The time frame should remain static as requested by the user
 
     if (targetFile.metadata.annotations && targetFile.metadata.annotations.length > 0) {
       setAnnotations(targetFile.metadata.annotations);
@@ -700,7 +730,7 @@ export_modified_edf()
     }
 
     setSuccess(`Switched to file: ${targetFile.metadata.filename}`);
-  }, [switchToFileHook, setSelectedChannels, setTimeFrameEnd, setTimeFrameStart, setAnnotations, setSuccess]);
+  }, [switchToFileHook, setSelectedChannels, setAnnotations, setSuccess]);
 
   // Helper function to remove a file
   const removeFile = useCallback((fileId: string) => {
@@ -1131,6 +1161,7 @@ result_json
       selectedChannels,
       useTimeFrameFilter ? { start: timeFrameStart, end: timeFrameEnd } : null,
       currentResutilState, // CRITICAL: Pass current state at call time
+      metadata?.filename, // Pass filename for plot headers
       setSuccess,
       setError,
       setLoadingMessage,
@@ -1326,7 +1357,7 @@ result_json
           const isSelected = selectedPlotsForReport.includes((result.id as string) || '');
           
           return (
-            <div key={index} className="mb-6 border rounded-lg">
+            <div key={index} id={`analysis-result-${result.id}`} className="mb-6 border rounded-lg">
               <div className="flex justify-between items-center p-3 bg-gray-50 rounded-t-lg">
                 <div className="flex items-center gap-3 flex-1">
                   {/* Plot selection checkbox */}
@@ -1346,6 +1377,11 @@ result_json
                       ({result.parameters.method.charAt(0).toUpperCase() + result.parameters.method.slice(1)})
                     </span>
                   ) : null}
+                  {result.filename && (
+                    <span className="text-sm font-normal text-green-600 ml-2">
+                      - {result.filename}
+                    </span>
+                  )}
                   {result.time_frame && (
                     <span className="text-sm font-normal text-gray-600 ml-2">
                       ({formatTimeHMSWrapper(result.time_frame.start) || result.time_frame.start.toFixed(1)+'s'} - {formatTimeHMSWrapper(result.time_frame.end) || result.time_frame.end.toFixed(1)+'s'})
@@ -1502,13 +1538,9 @@ result_json
         )}
       </div>
 
-      {/* Two-Column Layout - Full Width */}
-      <div className="w-full px-6 pb-6">
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 min-h-[calc(100vh-250px)]">
-          {/* Left Column - All Controls/Inputs */}
-          <div className="flex flex-col space-y-6 overflow-y-auto custom-scrollbar pr-2">
-            {/* File Upload Section */}
-        {!currentFile ? (
+      {/* Full-Width Upload Area - shown when no files are loaded */}
+      {loadedFiles.length === 0 && (
+        <div className="w-full px-6 pb-6">
           <FileUpload
             pyodideReady={pyodideReady}
             dragActive={dragActive}
@@ -1518,9 +1550,18 @@ result_json
             onDragOver={handleDragOver}
             onDrop={handleDrop}
             currentFile={null}
+            isFullWidth={true}
           />
-        ) : (
-          <>
+        </div>
+      )}
+
+      {/* Two-Column Layout - shown when files are loaded */}
+      {loadedFiles.length > 0 && (
+      <div className="w-full px-6 pb-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 min-h-[calc(100vh-250px)]">
+          {/* Left Column - All Controls/Inputs */}
+          <div className="flex flex-col space-y-6 overflow-y-auto custom-scrollbar pr-2">
+            {/* File List Panel */}
             <MultiFileListPanel
               loadedFiles={loadedFiles}
               activeFileId={activeFileId}
@@ -1538,15 +1579,13 @@ result_json
               className="hidden"
               disabled={!pyodideReady}
             />
-          </>
-        )}
 
         {/* File Information */}
         {metadata && <MetadataDisplay metadata={metadata} />}
 
         {/* Comparison Builder - now available after first file */}
         {loadedFiles.length >= 1 && (
-          <div className="bg-gray-800 border-4 border-[var(--brand-navy)] rounded-lg shadow-lg p-6 mb-6">
+          <div className="bg-gray-700 border-4 border-[var(--brand-light-gold)] rounded-lg shadow-lg p-6 mb-6"> 
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h3 className="text-lg font-semibold text-white">PSD Comparison Builder</h3>
@@ -1563,8 +1602,8 @@ result_json
                 }}
                 className={`px-4 py-2 rounded font-medium transition-colors border-2 border-[var(--brand-gold)] ${
                   comparisonMode
-                    ? 'bg-red-600 hover:bg-red-700 text-white'
-                    : 'bg-[var(--brand-navy)] hover:bg-[var(--brand-navy)]/90 text-white'
+                    ? 'bg-gray-800 hover:bg-red-700 text-white'
+                    : 'bg-[var(--brand-navy)] hover:bg-gray-600 text-white'
                 }`}
               >
                 {comparisonMode ? 'Exit Comparison Mode' : 'Enter Comparison Mode'}
@@ -1769,8 +1808,8 @@ result_json
                                 />
                               )}
                               <div className="flex-1 min-w-0">
-                                <p className="font-medium text-sm truncate text-gray-200">{trace.label}</p>
-                                <p className="text-xs text-gray-300">
+                                <p className="font-medium text-sm truncate text-gray-700">{trace.label}</p>
+                                <p className="text-xs text-gray-600">
                                   {traceFile?.nickname} • {trace.channel}
                                   {trace.timeFrame &&
                                     ` • ${trace.timeFrame.start.toFixed(1)}-${trace.timeFrame.end.toFixed(1)}s`}
@@ -3075,6 +3114,21 @@ result_json
 
           {/* Right Column - All Outputs/Results */}
           <div className="flex flex-col space-y-6 overflow-y-auto custom-scrollbar pl-2">
+            {/* Empty State - No plots yet */}
+            {!ssvepResult && analysisResults.length === 0 && (
+              <div className="bg-white rounded-lg shadow-lg p-8 text-center">
+                <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                  </svg>
+                </div>
+                <h3 className="text-lg font-semibold text-gray-700 mb-2">No Analysis Results Yet</h3>
+                <p className="text-gray-500 text-sm max-w-sm mx-auto">
+                  Use the controls on the left to run an analysis. Your plots and results will appear here.
+                </p>
+              </div>
+            )}
+
             {/* Results */}
             {renderSSVEPResults()}
             {renderAnalysisResults()}
@@ -3208,6 +3262,7 @@ result_json
           </div>
         </div>
       </div>
+      )}
 
       {/* Footer - Full Width */}
       <div className="w-full px-6 pb-6">

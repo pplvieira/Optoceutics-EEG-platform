@@ -15,6 +15,7 @@ interface FileUploadProps {
   onDragOver: (e: React.DragEvent) => void;
   onDrop: (e: React.DragEvent) => void;
   currentFile: File | null;
+  isFullWidth?: boolean;
 }
 
 export default function FileUpload({
@@ -25,7 +26,8 @@ export default function FileUpload({
   onDragLeave,
   onDragOver,
   onDrop,
-  currentFile
+  currentFile,
+  isFullWidth = false
 }: FileUploadProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -73,6 +75,66 @@ export default function FileUpload({
     );
   }
 
+  // Full-width layout for initial state (no files loaded)
+  if (isFullWidth) {
+    return (
+      <div className="bg-white rounded-lg shadow-lg p-8">
+        <div className="text-center mb-6">
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">EEG Signal Analysis Platform</h2>
+          <p className="text-gray-600">Upload your EDF, BDF, or FIF file to get started</p>
+        </div>
+        <div 
+          onDragEnter={onDragEnter}
+          onDragLeave={onDragLeave}
+          onDragOver={onDragOver}
+          onDrop={onDrop}
+          className={`border-2 border-dashed rounded-xl p-12 text-center transition-all duration-200 ${
+            !pyodideReady
+              ? 'border-gray-200 bg-gray-50 opacity-50 cursor-not-allowed'
+              : dragActive 
+                ? 'border-[var(--brand-blue)] bg-[var(--brand-blue)]/5' 
+                : 'border-gray-300 hover:border-[var(--brand-blue)] cursor-pointer'
+          }`}
+        >
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileInputChange}
+            accept=".edf,.bdf,.fif"
+            className="hidden"
+            disabled={!pyodideReady}
+          />
+          
+          <div className="flex flex-col items-center justify-center space-y-4">
+            <div className="w-16 h-16 bg-[var(--brand-blue)]/10 rounded-full flex items-center justify-center border-2 border-[var(--brand-blue)]/30">
+              <svg className="w-8 h-8 text-brand-blue" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+              </svg>
+            </div>
+            
+            <div className="space-y-3">
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={!pyodideReady}
+                className="bg-[var(--brand-navy)] hover:bg-[var(--brand-navy)]/90 text-white font-semibold py-3 px-8 rounded-lg disabled:opacity-50 transition-colors text-lg"
+              >
+                {pyodideReady ? 'Choose EDF/BDF File' : 'Initializing Python Environment...'}
+              </button>
+              
+              <p className="text-gray-600">
+                {dragActive ? 'Drop your file here!' : pyodideReady ? 'Or drag & drop your file anywhere on this area' : 'Please wait for the analysis environment to load...'}
+              </p>
+              <p className="text-sm text-gray-400">
+                🔒 100% local processing • No data uploads • No file size limits
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Standard compact layout (for left column when files exist)
   return (
     <div className="bg-white rounded-lg shadow-lg p-4 mb-6">
       <h2 className="text-lg font-semibold mb-3">Load EDF File</h2>

@@ -62,7 +62,7 @@ export default function ResultsDisplay({
     const isCollapsed = collapsedResults.has(0);
 
     return (
-      <div className="bg-white rounded-lg shadow-lg p-4 mt-4">
+      <div id="ssvep-result" className="bg-white rounded-lg shadow-lg p-4 mt-4">
         <div className="flex justify-between items-center mb-4">
           <h3 className="text-lg font-bold">SSVEP Analysis Results</h3>
           <button
@@ -154,15 +154,23 @@ export default function ResultsDisplay({
         {analysisResults.map((result, index) => {
           const resultId = index + 10;
           const isCollapsed = collapsedResults.has(resultId);
-          
           return (
-            <div key={index} className="mb-6 border rounded-lg">
+            <div
+              key={index}
+              id={`analysis-result-${result.id ?? index}`}
+              className="mb-6 border rounded-lg"
+            >
               <div className="flex justify-between items-center p-3 bg-gray-50 rounded-t-lg">
                 <h4 className="text-md font-semibold capitalize">
                   {result.analysis_type.replace('_', ' ')}
                   {(result.analysis_type === 'psd' || result.analysis_type === 'snr') && result.parameters && typeof result.parameters === 'object' && 'method' in result.parameters && (
                     <span className="text-sm font-normal text-brand-blue ml-2">
                       ({String(result.parameters.method).charAt(0).toUpperCase() + String(result.parameters.method).slice(1)})
+                    </span>
+                  )}
+                  {result.filename && (
+                    <span className="text-sm font-normal text-green-600 ml-2">
+                      - {result.filename}
                     </span>
                   )}
                   {result.time_frame && formatTimeHMS && (

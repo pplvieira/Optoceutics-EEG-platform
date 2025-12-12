@@ -21,6 +21,7 @@ interface UseAnalysisReturn {
     selectedChannels: string[],
     timeFrame?: { start: number; end: number } | null,
     useResutilStyle?: boolean, // CRITICAL: Read at call time, not from state
+    filename?: string, // Add filename parameter
     onSuccess?: (message: string) => void,
     onError?: (error: string) => void,
     onLoadingMessage?: (message: string) => void,
@@ -45,6 +46,7 @@ export function useAnalysis(): UseAnalysisReturn {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
+  const [currentFilename, setCurrentFilename] = useState<string>('');
 
   const simulateProgress = useCallback((duration: number) => {
     setProgress(0);
@@ -71,6 +73,7 @@ export function useAnalysis(): UseAnalysisReturn {
     selectedChannels: string[],
     timeFrame?: { start: number; end: number } | null,
     useResutilStyle: boolean = false, // CRITICAL: Read at call time
+    filename?: string,
     onSuccess?: (message: string) => void,
     onError?: (error: string) => void,
     onLoadingMessage?: (message: string) => void,
@@ -132,11 +135,16 @@ export function useAnalysis(): UseAnalysisReturn {
         };
       }
 
+      // Add filename information to the result
+      if (filename) {
+        parsedResult.filename = filename;
+      }
+
       // Add unique ID for plot selection
       parsedResult.id = `${type}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
       setAnalysisResults(prev => [...prev, parsedResult]);
-      onSuccess?.(`${type} analysis completed!`);
+      // Don't call onSuccess here - let the results useEffect handle the toast with scroll
 
     } catch (err) {
       console.error('Analysis error:', err);
@@ -202,7 +210,7 @@ export function useAnalysis(): UseAnalysisReturn {
       }
 
       setSSVEPResult(parsedResult);
-      onSuccess?.('SSVEP analysis completed successfully!');
+      // Don't call onSuccess here - let the SSVEP results useEffect handle the toast with scroll
 
     } catch (err) {
       console.error('SSVEP analysis error:', err);
